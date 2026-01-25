@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include "monero-methods.hpp"
 #include "wallet/api/wallet2_api.h"
+#include "lws_frontend.h"
 
 /** Lower-level utilities for key generation without disk I/O. */
 #include "cryptonote_basic/account.h"
@@ -12,6 +13,59 @@
 std::string hello(const std::vector<const std::string> &args) {
   printf("LWSF says hello\n");
   return "hello";
+}
+
+/** Wallet tracking structure. */
+struct WalletEntry {
+  Monero::Wallet* wallet;
+  std::string backend;
+  std::string path;
+  std::string walletId;
+  
+  uint64_t cachedSyncedHeight = 0;
+  uint64_t cachedBalance = 0;
+  uint64_t cachedUnlockedBalance = 0;
+};
+
+/**
+ * Global state - stores all open wallets by ID.
+ *
+ * Thread-safety: g_wallets is only ever accessed from the serial bridge queue
+ * (iOS DISPATCH_QUEUE_SERIAL, Android single-thread executor), so map reads and
+ * writes are never concurrent. The refresh-thread WalletListener uses its own
+ * wallet pointer and never touches this map, and closeWallet stops the wallet
+ * (joining its refresh thread) before erasing the entry. Do not access
+ * g_wallets from any other thread without adding synchronization.
+ */
+static std::map<std::string, WalletEntry> g_wallets;
+
+/** Helper to get wallet manager based on backend type. */
+static Monero::WalletManager* getWalletManager(const std::string& backend) {
+  if (backend == "lws") {
+    return lwsf::WalletManagerFactory::getWalletManager();
+  } else {
+    return Monero::WalletManagerFactory::getWalletManager();
+  }
+}
+
+/** Helper to find wallet by ID or throw exception. */
+static WalletEntry& findWalletOrThrow(const std::string& walletId) {
+  auto it = g_wallets.find(walletId);
+  if (it == g_wallets.end()) {
+    throw std::runtime_error("Wallet not found");
+  }
+  return it->second;
+}
+
+/** Helper to find any open wallet matching the given nettype. */
+static Monero::Wallet* findWalletByNettype(int nettype) {
+  Monero::NetworkType network = static_cast<Monero::NetworkType>(nettype);
+  for (const auto& pair : g_wallets) {
+    if (pair.second.wallet->nettype() == network) {
+      return pair.second.wallet;
+    }
+  }
+  throw std::runtime_error("No open wallet found for the requested network type");
 }
 
 /**
