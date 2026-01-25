@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include "monero-methods.hpp"
 #include "wallet/api/wallet2_api.h"
+#include "lws_frontend.h"
 
 // Lower-level utilities for key generation without disk I/O
 #include "cryptonote_basic/account.h"
@@ -12,6 +13,40 @@
 std::string hello(const std::vector<const std::string> &args) {
   printf("LWSF says hello\n");
   return "hello";
+}
+
+// Wallet tracking structure
+struct WalletEntry {
+  Monero::Wallet* wallet;
+  std::string backend; // "lwsf" or "monero"
+  std::string path;
+  std::string wallet_id;
+  
+  // Cache for optimization
+  uint64_t cached_synced_height = 0;
+  uint64_t cached_balance = 0;
+  uint64_t cached_unlocked_balance = 0;
+};
+
+// Global state - stores all open wallets by ID
+static std::map<std::string, WalletEntry> g_wallets;
+
+// Helper to get wallet manager based on backend type
+static Monero::WalletManager* getWalletManager(const std::string& backend) {
+  if (backend == "lwsf") {
+    return lwsf::WalletManagerFactory::getWalletManager();
+  } else {
+    return Monero::WalletManagerFactory::getWalletManager();
+  }
+}
+
+// Helper to find wallet by ID or throw exception
+static WalletEntry& findWalletOrThrow(const std::string& wallet_id) {
+  auto it = g_wallets.find(wallet_id);
+  if (it == g_wallets.end()) {
+    throw std::runtime_error("Wallet not found");
+  }
+  return it->second;
 }
 
 // Generate a new wallet's keys in memory (no disk I/O)
