@@ -4,6 +4,7 @@ import type {
   DerivedKeys,
   GeneratedWallet,
   NetworkType,
+  TransactionsPage,
   WalletBackend,
   WalletStatus
 } from './types'
@@ -172,5 +173,32 @@ export class CppBridge {
         throw new Error(parsed.error)
       }
     }
+  }
+
+  /**
+   * Get all transactions with pagination.
+   * @param walletId - Unique identifier for the wallet
+   * @param page - Page number (0-indexed)
+   * @param pageSize - Number of transactions per page
+   * @param sort - Sort order: 'asc' (oldest first) or 'desc' (newest first), pending always at end
+   * @returns Paginated transactions with metadata
+   */
+  async getAllTransactions(
+    walletId: string,
+    page: number,
+    pageSize: number,
+    sort: 'asc' | 'desc' = 'asc'
+  ): Promise<TransactionsPage> {
+    const response = await this.module.callMonero('getAllTransactions', [
+      walletId,
+      page.toString(),
+      pageSize.toString(),
+      sort
+    ])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as TransactionsPage
   }
 }
