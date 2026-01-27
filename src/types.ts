@@ -62,3 +62,24 @@ export interface TransactionsPage {
   page: number
   pageSize: number
 }
+
+// Transaction priority levels
+export enum TransactionPriority {
+  Default = 0,
+  Low = 1,
+  Medium = 2,
+  High = 3
+}
+
+// Recipient for createTransaction
+export interface Recipient {
+  address: string
+  amount: string // atomic units as string to handle uint64
+}
+
+// Return type for createTransaction
+export interface SignedTransaction {
+  txid: string
+  signedTxHex: string
+  fee: string
+}
