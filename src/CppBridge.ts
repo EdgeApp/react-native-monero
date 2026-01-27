@@ -4,6 +4,9 @@ import type {
   DerivedKeys,
   GeneratedWallet,
   NetworkType,
+  Recipient,
+  SignedTransaction,
+  TransactionPriority,
   TransactionsPage,
   WalletBackend,
   WalletStatus
@@ -178,5 +181,50 @@ export class CppBridge {
       sort
     ])
     return JSON.parse(response) as TransactionsPage
+  }
+
+  /**
+   * Create a transaction (supports multiple recipients).
+   * The transaction is created and signed but not broadcast yet.
+   * @param walletId - Unique identifier for the wallet
+   * @param recipients - Array of recipients with addresses and amounts (atomic units)
+   * @param priority - Transaction priority (0=Default, 1=Low, 2=Medium, 3=High)
+   * @returns SignedTransaction with txid, signedTxHex, and fee (atomic units)
+   */
+  async createTransaction(
+    walletId: string,
+    recipients: Recipient[],
+    priority: TransactionPriority
+  ): Promise<SignedTransaction> {
+    const addresses = recipients.map(r => r.address).join(',')
+    const amounts = recipients.map(r => r.amount).join(',')
+
+    const response = await this.module.callMonero('createTransaction', [
+      walletId,
+      addresses,
+      amounts,
+      priority.toString(),
+      this.module.documentDirectory
+    ])
+    return JSON.parse(response) as SignedTransaction
+  }
+
+  /**
+   * Broadcast a previously created transaction.
+   * @param walletId - Unique identifier for the wallet
+   * @param signedTx - The signed transaction string from createTransaction
+   * @returns The transaction hash
+   * @throws Error if broadcast fails
+   */
+  async broadcastTransaction(
+    walletId: string,
+    signedTx: string
+  ): Promise<string> {
+    const response = await this.module.callMonero('broadcastTransaction', [
+      walletId,
+      signedTx,
+      this.module.documentDirectory
+    ])
+    return response
   }
 }
