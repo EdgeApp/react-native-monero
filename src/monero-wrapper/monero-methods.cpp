@@ -6,6 +6,8 @@
 #include <set>
 #include <algorithm>
 #include <vector>
+#include <sstream>
+#include <fstream>
 #include "monero-methods.hpp"
 #include "wallet/api/wallet2_api.h"
 #include "lws_frontend.h"
@@ -14,6 +16,14 @@
 #include "cryptonote_basic/account.h"
 #include "mnemonics/electrum-words.h"
 #include "string_tools.h"
+
+// Forward declaration for LWSF api_key support (defined in patched rpc.cpp)
+namespace lwsf { namespace config {
+  void set_api_key(const std::string& k);
+}}
+
+/** Counter for unique temp file names. */
+static uint64_t gTxFileCounter = 0;
 
 std::string hello(const std::vector<const std::string> &args) {
   printf("LWSF says hello\n");
@@ -443,6 +453,138 @@ std::string getAllTransactions(const std::vector<const std::string> &args) {
   return json;
 }
 
+/** Helper to split a comma-separated string. */
+static std::vector<std::string> splitString(const std::string& str, char delimiter) {
+  std::vector<std::string> tokens;
+  std::stringstream ss(str);
+  std::string token;
+  while (std::getline(ss, token, delimiter)) {
+    tokens.push_back(token);
+  }
+  return tokens;
+}
+
+/**
+ * Create a transaction (multi-recipient supported).
+ * Args: walletId, addresses (comma-separated), amounts (comma-separated), priority, documentDirectory
+ * Returns: JSON with txid, signedTxHex, and fee
+ */
+std::string createTransaction(const std::vector<const std::string> &args) {
+  std::string walletId = args[0];
+  std::string addressesStr = args[1];
+  std::string amountsStr = args[2];
+  int priority = std::stoi(args[3]);
+  std::string documentDirectory = args[4];
+  
+  WalletEntry& entry = findWalletOrThrow(walletId);
+  Monero::Wallet* wallet = entry.wallet;
+  
+  std::vector<std::string> addresses = splitString(addressesStr, ',');
+  std::vector<std::string> amountStrs = splitString(amountsStr, ',');
+  
+  if (addresses.empty() || addresses.size() != amountStrs.size()) {
+    throw std::runtime_error("Addresses and amounts must have same length and not be empty");
+  }
+  
+  std::vector<uint64_t> amounts;
+  for (const auto& amt : amountStrs) {
+    amounts.push_back(std::stoull(amt));
+  }
+
+  Monero::optional<std::vector<uint64_t>> optAmounts;
+  if (addresses.size() == 1 && amounts.size() == 1 && amounts[0] == 0) {
+    optAmounts = std::nullopt;
+  } else {
+    optAmounts = amounts;
+  }
+  
+  wallet->pauseRefresh();
+  
+  Monero::PendingTransaction* ptx = wallet->createTransactionMultDest(
+    addresses,
+    "",
+    optAmounts,
+    0,
+    static_cast<Monero::PendingTransaction::Priority>(priority)
+  );
+  
+  wallet->startRefresh();
+  
+  if (ptx == nullptr) {
+    throw std::runtime_error("Failed to create transaction");
+  }
+  
+  if (ptx->status() != Monero::PendingTransaction::Status_Ok) {
+    std::string error = ptx->errorString();
+    wallet->disposeTransaction(ptx);
+    throw std::runtime_error("Transaction error: " + error);
+  }
+  
+  std::vector<std::string> txIds = ptx->txid();
+  std::string txHash = txIds.empty() ? "" : txIds[0];
+  uint64_t fee = ptx->fee();
+  
+  std::string tempFile = documentDirectory + "/tx_" + std::to_string(++gTxFileCounter) + ".signed";
+  
+  if (!ptx->commit(tempFile, true)) {
+    std::string error = ptx->errorString();
+    wallet->disposeTransaction(ptx);
+    throw std::runtime_error("Failed to save transaction: " + error);
+  }
+  
+  wallet->disposeTransaction(ptx);
+  
+  std::ifstream file(tempFile, std::ios::binary);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to read signed transaction file");
+  }
+  std::string fileContents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  file.close();
+  
+  std::remove(tempFile.c_str());
+  
+  std::string signedTxHex = epee::string_tools::buff_to_hex_nodelimer(fileContents);
+  
+  return "{\"txid\":\"" + txHash + "\",\"signedTxHex\":\"" + signedTxHex + "\",\"fee\":\"" + std::to_string(fee) + "\"}";
+}
+
+/**
+ * Broadcast a previously created transaction.
+ * Args: walletId, signedTxHex (hex string from createTransaction), documentDirectory
+ * Returns: "success" on success (txid is obtained from createTransaction result)
+ */
+std::string broadcastTransaction(const std::vector<const std::string> &args) {
+  std::string walletId = args[0];
+  std::string signedTxHex = args[1];
+  std::string documentDirectory = args[2];
+  
+  WalletEntry& entry = findWalletOrThrow(walletId);
+  Monero::Wallet* wallet = entry.wallet;
+  
+  std::string signedTxBlob;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(signedTxHex, signedTxBlob)) {
+    throw std::runtime_error("Invalid hex string");
+  }
+  
+  std::string tempFile = documentDirectory + "/tx_broadcast_" + std::to_string(++gTxFileCounter) + ".signed";
+  std::ofstream file(tempFile, std::ios::binary);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to create temp file for broadcast");
+  }
+  file.write(signedTxBlob.data(), signedTxBlob.size());
+  file.close();
+  
+  bool success = wallet->submitTransaction(tempFile);
+  
+  std::remove(tempFile.c_str());
+  
+  if (!success) {
+    throw std::runtime_error("Broadcast failed: " + wallet->errorString());
+  }
+  
+  return "success";
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
@@ -453,6 +595,8 @@ const MoneroMethod moneroMethods[] = {
   { "getWalletStatus", 1, getWalletStatus },
   { "getAllTransactions", 4, getAllTransactions },
   { "closeWallet", 1, closeWallet },
+  { "createTransaction", 5, createTransaction },
+  { "broadcastTransaction", 3, broadcastTransaction },
 };
 
 const unsigned moneroMethodCount = std::end(moneroMethods) - std::begin(moneroMethods);
