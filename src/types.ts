@@ -34,3 +34,34 @@ export interface WalletStatus {
   balance: string
   unlockedBalance: string
 }
+
+/** Transaction direction. */
+export type TransactionDirection = 0 | 1
+
+/** Single transaction info. */
+export interface TransactionInfo {
+  hash: string
+  direction: TransactionDirection
+  isPending: boolean
+  isFailed: boolean
+  isCoinbase: boolean
+  amount: string
+  fee: string
+  blockHeight: number
+  confirmations: number
+  timestamp: number
+  paymentId: string
+  description: string
+  label: string
+  unlockTime: number
+  subaddrAccount: number
+  txKey?: string // Only available for outgoing transactions we sent
+}
+
+/** Return type for getAllTransactions. */
+export interface TransactionsPage {
+  transactions: TransactionInfo[]
+  totalCount: number
+  page: number
+  pageSize: number
+}

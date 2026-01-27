@@ -2,6 +2,8 @@
 #include <string>
 #include <stdexcept>
 #include <map>
+#include <algorithm>
+#include <vector>
 #include "monero-methods.hpp"
 #include "wallet/api/wallet2_api.h"
 #include "lws_frontend.h"
@@ -322,6 +324,68 @@ std::string closeWallet(const std::vector<const std::string> &args) {
   return "ok";
 }
 
+/**
+ * Get all transactions with pagination.
+ * Args: walletId, page (0-indexed), pageSize, sort ("asc" or "desc")
+ * Returns: JSON with transactions array, totalCount, page, pageSize
+ */
+std::string getAllTransactions(const std::vector<const std::string> &args) {
+  std::string walletId = args[0];
+  int page = std::stoi(args[1]);
+  int pageSize = std::stoi(args[2]);
+  bool ascending = (args[3] == "asc");
+  
+  Monero::Wallet* wallet = findWalletOrThrow(walletId).wallet;
+  
+  Monero::TransactionHistory* history = wallet->history();
+  history->refresh();
+  std::vector<Monero::TransactionInfo*> txs = history->getAll();
+  
+  std::sort(txs.begin(), txs.end(), [ascending](Monero::TransactionInfo* a, Monero::TransactionInfo* b) {
+    if (a->isPending() != b->isPending()) return !a->isPending();
+    return ascending ? a->blockHeight() < b->blockHeight() : a->blockHeight() > b->blockHeight();
+  });
+  
+  int totalCount = static_cast<int>(txs.size());
+  int startIndex = page * pageSize;
+  int endIndex = std::min(startIndex + pageSize, totalCount);
+  
+  std::string json = "{\"transactions\":[";
+  for (int i = startIndex; i < endIndex; i++) {
+    if (i > startIndex) json += ",";
+    Monero::TransactionInfo* tx = txs[i];
+    json += "{\"hash\":\"" + tx->hash() + "\",";
+    json += "\"direction\":" + std::to_string(tx->direction()) + ",";
+    json += "\"isPending\":" + std::string(tx->isPending() ? "true" : "false") + ",";
+    json += "\"isFailed\":" + std::string(tx->isFailed() ? "true" : "false") + ",";
+    json += "\"isCoinbase\":" + std::string(tx->isCoinbase() ? "true" : "false") + ",";
+    json += "\"amount\":\"" + std::to_string(tx->amount()) + "\",";
+    json += "\"fee\":\"" + std::to_string(tx->fee()) + "\",";
+    json += "\"blockHeight\":" + std::to_string(tx->blockHeight()) + ",";
+    json += "\"confirmations\":" + std::to_string(tx->confirmations()) + ",";
+    json += "\"timestamp\":" + std::to_string(tx->timestamp()) + ",";
+    json += "\"paymentId\":\"" + tx->paymentId() + "\",";
+    json += "\"description\":\"" + tx->description() + "\",";
+    json += "\"label\":\"" + tx->label() + "\",";
+    json += "\"unlockTime\":" + std::to_string(tx->unlockTime()) + ",";
+    json += "\"subaddrAccount\":" + std::to_string(tx->subaddrAccount());
+    
+    try {
+      std::string txKey = wallet->getTxKey(tx->hash());
+      if (!txKey.empty()) {
+        json += ",\"txKey\":\"" + txKey + "\"";
+      }
+    } catch (...) {
+    }
+    
+    json += "}";
+  }
+  json += "],\"totalCount\":" + std::to_string(totalCount) + ",";
+  json += "\"page\":" + std::to_string(page) + ",\"pageSize\":" + std::to_string(pageSize) + "}";
+  
+  return json;
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
@@ -330,6 +394,7 @@ const MoneroMethod moneroMethods[] = {
   { "isValidAddress", 2, isValidAddress },
   { "openWallet", 8, openWallet },
   { "getWalletStatus", 1, getWalletStatus },
+  { "getAllTransactions", 4, getAllTransactions },
   { "closeWallet", 1, closeWallet },
 };
 
