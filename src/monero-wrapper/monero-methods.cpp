@@ -2,6 +2,8 @@
 #include <string>
 #include <stdexcept>
 #include <map>
+#include <memory>
+#include <set>
 #include <algorithm>
 #include <vector>
 #include "monero-methods.hpp"
@@ -18,9 +20,58 @@ std::string hello(const std::vector<const std::string> &args) {
   return "hello";
 }
 
+/** WalletListener implementation - handles wallet events and auto-saves during sync. */
+class WalletListeners : public Monero::WalletListener {
+public:
+  WalletListeners(Monero::Wallet* wallet) : m_wallet(wallet), m_lastSaveHeight(0) {}
+  virtual ~WalletListeners() {}
+  
+  void moneySpent(const std::string &txId, uint64_t amount) override {}
+  void moneyReceived(const std::string &txId, uint64_t amount) override {}
+  void unconfirmedMoneyReceived(const std::string &txId, uint64_t amount) override {}
+  
+  void newBlock(uint64_t height) override {
+    // Save progress every 1000 blocks during INITIAL sync only.
+    // Once synchronized(), refreshed() takes over save responsibility.
+    // This is safe because newBlock() is called from the refresh thread.
+    const uint64_t SAVE_INTERVAL_BLOCKS = 1000;
+    
+    // Only save during initial sync (before wallet is fully synchronized)
+    if (m_wallet->synchronized()) {
+      return; // Let refreshed() handle saves once fully synced
+    }
+    
+    if (height >= m_lastSaveHeight + SAVE_INTERVAL_BLOCKS) {
+      try {
+        m_wallet->store("");
+        m_lastSaveHeight = height;
+      } catch (...) {
+        // Ignore store errors during sync - will retry on next interval
+      }
+    }
+  }
+  
+  void updated() override {}
+  
+  void refreshed() override {
+    // Called when refresh cycle completes - safe to store here
+    try {
+      m_wallet->store("");
+      m_lastSaveHeight = m_wallet->blockChainHeight();
+    } catch (...) {
+      // Ignore store errors - will retry on next refresh
+    }
+  }
+
+private:
+  Monero::Wallet* m_wallet;
+  uint64_t m_lastSaveHeight;
+};
+
 /** Wallet tracking structure. */
 struct WalletEntry {
   Monero::Wallet* wallet;
+  std::unique_ptr<WalletListeners> listener;
   std::string backend;
   std::string path;
   std::string walletId;
@@ -280,6 +331,9 @@ std::string openWallet(const std::vector<const std::string> &args) {
   bool isLws = (backend == "lws");
   wallet->init(daemonAddress, 0, "", "", false, isLws, "");
 
+  auto listener = std::make_unique<WalletListeners>(wallet, walletId);
+  wallet->setListener(listener.get());
+
   wallet->startRefresh();
   
   uint64_t syncedHeight = wallet->blockChainHeight();
@@ -289,13 +343,14 @@ std::string openWallet(const std::vector<const std::string> &args) {
   
   WalletEntry entry;
   entry.wallet = wallet;
+  entry.listener = std::move(listener);
   entry.backend = backend;
   entry.path = path;
   entry.walletId = walletId;
   entry.cachedSyncedHeight = syncedHeight;
   entry.cachedBalance = balance;
   entry.cachedUnlockedBalance = unlockedBalance;
-  g_wallets[walletId] = entry;
+  g_wallets[walletId] = std::move(entry);
 
   std::string json = "{";
   json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
@@ -349,6 +404,8 @@ std::string closeWallet(const std::vector<const std::string> &args) {
   std::string walletId = args[0];
   WalletEntry& entry = findWalletOrThrow(walletId);
   Monero::WalletManager* manager = getWalletManager(entry.backend);
+
+  entry.wallet->setListener(nullptr);
 
   manager->closeWallet(entry.wallet);
   
