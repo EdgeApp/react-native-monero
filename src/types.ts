@@ -4,6 +4,8 @@ export enum NetworkType {
   STAGENET = 2
 }
 
+export type WalletBackend = 'lws' | 'monerod'
+
 export interface GeneratedWallet {
   mnemonic: string
   secretSpendKey: string
@@ -17,4 +19,12 @@ export interface DerivedKeys {
   publicViewKey: string
   secretSpendKey: string
   publicSpendKey: string
+}
+
+// Return type for openWallet and getWalletStatus
+export interface WalletStatus {
+  syncedHeight: number
+  networkHeight: number
+  balance: number
+  unlockedBalance: number
 }

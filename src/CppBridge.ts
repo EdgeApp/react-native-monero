@@ -1,6 +1,12 @@
 'use strict'
 
-import type { DerivedKeys, GeneratedWallet, NetworkType } from './types'
+import type {
+  DerivedKeys,
+  GeneratedWallet,
+  NetworkType,
+  WalletBackend,
+  WalletStatus
+} from './types'
 
 /**
  * The shape of the native C++ module exposed to React Native.
@@ -71,7 +77,7 @@ export class CppBridge {
 
   /**
    * Get the current network blockchain height from a daemon.
-   * @param backend - Backend type ('lwsf' or 'monerod')
+   * @param backend - Backend type ('lws' or 'monerod')
    * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
    * @param daemonAddress - Daemon address to query
    * @returns Current blockchain height
@@ -101,5 +107,70 @@ export class CppBridge {
       nettype.toString()
     ])
     return response === 'true'
+  }
+
+  /**
+   * Open or create a wallet. If already open, returns current status.
+   * If wallet exists on disk, opens it. Otherwise creates from mnemonic.
+   * @param walletId - Unique identifier for the wallet
+   * @param backend - Backend type ("lws" or "monerod")
+   * @param mnemonic - The 25-word mnemonic seed
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @param restoreHeight - Block height to restore from
+   * @param daemonAddress - Daemon address to connect to
+   * @returns Current wallet status (heights and balances)
+   */
+  async openWallet(
+    walletId: string,
+    backend: WalletBackend,
+    mnemonic: string,
+    password: string,
+    nettype: NetworkType,
+    restoreHeight: number,
+    daemonAddress: string
+  ): Promise<WalletStatus> {
+    const response = await this.module.callMonero('openWallet', [
+      this.module.documentDirectory,
+      walletId,
+      backend,
+      mnemonic,
+      password,
+      nettype.toString(),
+      restoreHeight.toString(),
+      daemonAddress
+    ])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as WalletStatus
+  }
+
+  /**
+   * Get the current status of an open wallet.
+   * @param walletId - Unique identifier for the wallet
+   * @returns Current wallet status (heights and balances)
+   */
+  async getWalletStatus(walletId: string): Promise<WalletStatus> {
+    const response = await this.module.callMonero('getWalletStatus', [walletId])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as WalletStatus
+  }
+
+  /**
+   * Close an open wallet.
+   * @param walletId - Unique identifier for the wallet to close
+   */
+  async closeWallet(walletId: string): Promise<void> {
+    const response = await this.module.callMonero('closeWallet', [walletId])
+    if (response !== 'ok') {
+      const parsed = JSON.parse(response)
+      if (typeof parsed === 'object' && 'error' in parsed) {
+        throw new Error(parsed.error)
+      }
+    }
   }
 }
