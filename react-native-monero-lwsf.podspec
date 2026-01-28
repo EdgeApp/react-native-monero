@@ -21,6 +21,8 @@ Pod::Spec.new do |s|
     "ios/MoneroModule.mm",
     "src/monero-wrapper/monero-methods.hpp"
   s.vendored_frameworks = "ios/MoneroModule.xcframework"
+  s.libraries = "c++"
 
   s.dependency "React-Core"
+  s.frameworks = 'Security'
 end

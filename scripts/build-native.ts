@@ -74,6 +74,9 @@ const ffi = defineLib({
     if (platform.type === 'android') {
       sources.push('jni/jni.cpp')
     }
+    if (platform.type === 'ios') {
+      sources.push('clear_cache_stub.c')
+    }
 
     // Compile our sources:
     const objects: string[] = []
@@ -94,7 +97,7 @@ const ffi = defineLib({
           : ''
       await build.exec(useCxx ? platform.tools.CXX : platform.tools.CC, [
         '-c',
-        '-std=c++17',
+        ...(useCxx ? ['-std=c++17'] : []),
         ...sdkFlags.split(' '),
         ...includePaths.map(path => `-I${path}`),
         `-o${object}`,

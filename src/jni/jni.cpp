@@ -34,8 +34,8 @@ Java_app_edge_rnmonero_RnMoneroModule_callMoneroJNI(
   for (int i = 0; i < moneroMethodCount; ++i) {
     if (moneroMethods[i].name != methodString) continue;
 
-    // Validate the argument count:
-    if (strings.size() != moneroMethods[i].argc) {
+    // Validate the argument count (skip if -1 means variable args):
+    if (moneroMethods[i].argc != -1 && strings.size() != moneroMethods[i].argc) {
       env->ThrowNew(
         env->FindClass("java/lang/Exception"),
         "lwsf incorrect C++ argument count"
