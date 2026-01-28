@@ -88,4 +88,18 @@ export class CppBridge {
     ])
     return parseInt(response, 10)
   }
+
+  /**
+   * Validate a Monero address.
+   * @param address - The address to validate
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @returns true if valid, false otherwise
+   */
+  async isValidAddress(address: string, nettype: number): Promise<boolean> {
+    const response = await this.module.callMonero('isValidAddress', [
+      address,
+      nettype.toString()
+    ])
+    return response === 'true'
+  }
 }
