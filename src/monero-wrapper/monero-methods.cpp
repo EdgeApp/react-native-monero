@@ -2,6 +2,7 @@
 #include <string>
 #include <stdexcept>
 #include "monero-methods.hpp"
+#include "wallet/api/wallet2_api.h"
 
 /** Lower-level utilities for key generation without disk I/O. */
 #include "cryptonote_basic/account.h"
@@ -115,11 +116,28 @@ std::string getNetworkBlockHeight(const std::vector<const std::string> &args) {
   uint64_t height = manager->blockchainHeight();
   return std::to_string(height);
 }
+
+/**
+ * Validate a Monero address.
+ * Args: address, nettype
+ * Returns: "true" or "false"
+ */
+std::string isValidAddress(const std::vector<const std::string> &args) {
+  std::string address = args[0];
+  int nettype = std::stoi(args[1]);
+  Monero::NetworkType network = static_cast<Monero::NetworkType>(nettype);
+  
+  // addressValid is a static method on Monero::Wallet
+  bool valid = Monero::Wallet::addressValid(address, network);
+  return valid ? "true" : "false";
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
   { "seedAndKeysFromMnemonic", 2, seedAndKeysFromMnemonic },
-  { "getNetworkBlockHeight", 3, getNetworkBlockHeight }
+  { "getNetworkBlockHeight", 3, getNetworkBlockHeight },
+  { "isValidAddress", 2, isValidAddress }
 };
 
 const unsigned moneroMethodCount = std::end(moneroMethods) - std::begin(moneroMethods);
