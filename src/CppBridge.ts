@@ -1,5 +1,7 @@
 'use strict'
 
+import type { DerivedKeys, GeneratedWallet, NetworkType } from './types'
+
 /**
  * The shape of the native C++ module exposed to React Native.
  *
@@ -16,4 +18,74 @@ export interface NativeMoneroLwsfModule {
 
   readonly methodNames: string[]
   readonly documentDirectory: string
+}
+
+export class CppBridge {
+  private readonly module: NativeMoneroLwsfModule
+
+  constructor(moneroLwsfModule: NativeMoneroLwsfModule) {
+    this.module = moneroLwsfModule
+  }
+
+  /**
+   * Generate a new wallet's keys in memory (no disk I/O).
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @param language - Mnemonic language (e.g., "English")
+   * @returns Generated wallet with mnemonic and spend keys
+   */
+  async generateWallet(
+    nettype: NetworkType,
+    language: string = 'English'
+  ): Promise<GeneratedWallet> {
+    const response = await this.module.callMonero('generateWallet', [
+      nettype.toString(),
+      language
+    ])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as GeneratedWallet
+  }
+
+  /**
+   * Derive all keys from a mnemonic (no disk I/O).
+   * @param mnemonic - The 25-word mnemonic seed
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @returns All four keys (view and spend, public and secret)
+   */
+  async seedAndKeysFromMnemonic(
+    mnemonic: string,
+    nettype: NetworkType
+  ): Promise<DerivedKeys> {
+    const response = await this.module.callMonero('seedAndKeysFromMnemonic', [
+      mnemonic,
+      nettype.toString()
+    ])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as DerivedKeys
+  }
+
+  /**
+   * Get the current network blockchain height from a daemon.
+   * @param backend - Backend type ('lwsf' or 'monerod')
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @param daemonAddress - Daemon address to query
+   * @returns Current blockchain height
+   */
+  async getNetworkBlockHeight(
+    backend: WalletBackend,
+    nettype: NetworkType,
+    daemonAddress: string
+  ): Promise<number> {
+    const response = await this.module.callMonero('getNetworkBlockHeight', [
+      backend,
+      nettype.toString(),
+      daemonAddress
+    ])
+    return parseInt(response, 10)
+  }
 }

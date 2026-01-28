@@ -56,7 +56,9 @@ const ffi = defineLib({
     const includePaths = [
       join(prefixPath, 'include'),
       join(lwsfPath, 'include'),
-      join(build.basePath, 'monero/src')
+      join(build.basePath, 'monero/src'),
+      join(build.basePath, 'monero/contrib/epee/include'),
+      join(build.basePath, 'monero/external/easylogging++')
     ]
     const libPaths = [join(prefixPath, 'lib')]
     const libs = [
