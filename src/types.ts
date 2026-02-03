@@ -83,3 +83,22 @@ export interface SignedTransaction {
   signedTxHex: string
   fee: string
 }
+
+// Parsed Monero URI (parseUri result)
+export interface ParsedUri {
+  address: string
+  paymentId: string
+  amount: string // atomic units as string
+  txDescription: string
+  recipientName: string
+  unknownParameters: string[]
+}
+
+// Params for encodeUri (make monero: URI)
+export interface EncodeUriParams {
+  address: string
+  paymentId?: string // empty or omit; use integrated address for payment id
+  amount: string // atomic units as string
+  txDescription?: string
+  recipientName?: string
+}

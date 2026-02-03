@@ -2,8 +2,10 @@
 
 import type {
   DerivedKeys,
+  EncodeUriParams,
   GeneratedWallet,
   NetworkType,
+  ParsedUri,
   Recipient,
   SignedTransaction,
   TransactionPriority,
@@ -252,6 +254,54 @@ export class CppBridge {
       this.module.documentDirectory
     ])
     // Check for error response
+    if (response.startsWith('{')) {
+      const parsed = JSON.parse(response)
+      if (typeof parsed === 'object' && 'error' in parsed) {
+        throw new Error(parsed.error)
+      }
+    }
+    return response
+  }
+
+  /**
+   * Parse a monero: URI into its components.
+   * @param uri - The monero: URI to parse
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @returns Parsed URI components
+   * @throws Error if URI is invalid
+   */
+  async parseUri(uri: string, nettype: NetworkType): Promise<ParsedUri> {
+    const response = await this.module.callMonero('parseUri', [
+      uri,
+      nettype.toString()
+    ])
+    const parsed = JSON.parse(response)
+    if (typeof parsed === 'object' && 'error' in parsed) {
+      throw new Error(parsed.error)
+    }
+    return parsed as ParsedUri
+  }
+
+  /**
+   * Encode a monero: URI from components.
+   * @param params - URI components (address, amount, etc.)
+   * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
+   * @returns The encoded monero: URI
+   * @throws Error if parameters are invalid
+   */
+  async encodeUri(
+    params: EncodeUriParams,
+    nettype: NetworkType
+  ): Promise<string> {
+    const response = await this.module.callMonero('encodeUri', [
+      params.address,
+      params.paymentId ?? '',
+      params.amount,
+      params.txDescription ?? '',
+      params.recipientName ?? '',
+      nettype.toString()
+    ])
+    // Check for error response (JSON object with error field)
     if (response.startsWith('{')) {
       const parsed = JSON.parse(response)
       if (typeof parsed === 'object' && 'error' in parsed) {

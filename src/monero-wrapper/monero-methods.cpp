@@ -2,6 +2,7 @@
 #include <string>
 #include <stdexcept>
 #include <map>
+#include <set>
 #include <algorithm>
 #include <vector>
 #include <sstream>
@@ -12,8 +13,12 @@
 
 // Lower-level utilities for key generation without disk I/O
 #include "cryptonote_basic/account.h"
+#include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "mnemonics/electrum-words.h"
 #include "string_tools.h"
+#include "net/abstract_http_client.h"
+#include <boost/algorithm/string.hpp>
 
 // Counter for unique temp file names
 static uint64_t g_tx_file_counter = 0;
@@ -587,6 +592,175 @@ std::string broadcastTransaction(const std::vector<const std::string> &args) {
   return "success";
 }
 
+// Helper: escape a string for JSON (escape backslash and double-quote)
+static std::string jsonEscape(const std::string& s) {
+  std::string result;
+  result.reserve(s.size());
+  for (char c : s) {
+    if (c == '\\') result += "\\\\";
+    else if (c == '"') result += "\\\"";
+    else if (c == '\n') result += "\\n";
+    else if (c == '\r') result += "\\r";
+    else if (c == '\t') result += "\\t";
+    else result += c;
+  }
+  return result;
+}
+
+// Helper: validate long payment id (64 hex chars = 32 bytes)
+static bool isValidLongPaymentId(const std::string& payment_id_str) {
+  std::string payment_id_data;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(payment_id_str, payment_id_data))
+    return false;
+  return payment_id_data.size() == 32; // sizeof(crypto::hash)
+}
+
+// Parse a monero: URI
+// Args: uri, nettype
+// Returns: JSON with address, paymentId, amount (atomic string), txDescription, recipientName, unknownParameters[]
+// or JSON with error field on failure
+std::string parseUri(const std::vector<const std::string> &args) {
+  std::string uri = args[0];
+  int nettype = std::stoi(args[1]);
+  cryptonote::network_type network = static_cast<cryptonote::network_type>(nettype);
+  
+  // Check scheme
+  if (uri.substr(0, 7) != "monero:") {
+    return "{\"error\":\"URI has wrong scheme (expected \\\"monero:\\\")\"}";
+  }
+  
+  std::string remainder = uri.substr(7);
+  const char *ptr = strchr(remainder.c_str(), '?');
+  std::string address = ptr ? remainder.substr(0, ptr - remainder.c_str()) : remainder;
+  
+  // Validate address
+  cryptonote::address_parse_info info;
+  if (!cryptonote::get_account_address_from_str(info, network, address)) {
+    return "{\"error\":\"URI has wrong address: " + jsonEscape(address) + "\"}";
+  }
+  
+  // Initialize output values
+  std::string payment_id;
+  uint64_t amount = 0;
+  std::string tx_description;
+  std::string recipient_name;
+  std::vector<std::string> unknown_parameters;
+  
+  // Parse query parameters if present
+  if (strchr(remainder.c_str(), '?')) {
+    std::string body = remainder.substr(address.size() + 1);
+    if (!body.empty()) {
+      std::vector<std::string> arguments;
+      boost::split(arguments, body, boost::is_any_of("&"));
+      std::set<std::string> have_arg;
+      
+      for (const auto &arg : arguments) {
+        std::vector<std::string> kv;
+        boost::split(kv, arg, boost::is_any_of("="));
+        if (kv.size() != 2) {
+          return "{\"error\":\"URI has wrong parameter: " + jsonEscape(arg) + "\"}";
+        }
+        if (have_arg.find(kv[0]) != have_arg.end()) {
+          return "{\"error\":\"URI has more than one instance of " + jsonEscape(kv[0]) + "\"}";
+        }
+        have_arg.insert(kv[0]);
+        
+        if (kv[0] == "tx_amount") {
+          if (!cryptonote::parse_amount(amount, kv[1])) {
+            return "{\"error\":\"URI has invalid amount: " + jsonEscape(kv[1]) + "\"}";
+          }
+        } else if (kv[0] == "tx_payment_id") {
+          if (info.has_payment_id) {
+            return "{\"error\":\"Separate payment id given with an integrated address\"}";
+          }
+          if (!isValidLongPaymentId(kv[1])) {
+            return "{\"error\":\"Invalid payment id: " + jsonEscape(kv[1]) + "\"}";
+          }
+          payment_id = kv[1];
+        } else if (kv[0] == "recipient_name") {
+          recipient_name = epee::net_utils::convert_from_url_format(kv[1]);
+        } else if (kv[0] == "tx_description") {
+          tx_description = epee::net_utils::convert_from_url_format(kv[1]);
+        } else {
+          unknown_parameters.push_back(arg);
+        }
+      }
+    }
+  }
+  
+  // Build JSON response
+  std::string json = "{";
+  json += "\"address\":\"" + jsonEscape(address) + "\",";
+  json += "\"paymentId\":\"" + jsonEscape(payment_id) + "\",";
+  json += "\"amount\":\"" + std::to_string(amount) + "\",";
+  json += "\"txDescription\":\"" + jsonEscape(tx_description) + "\",";
+  json += "\"recipientName\":\"" + jsonEscape(recipient_name) + "\",";
+  json += "\"unknownParameters\":[";
+  for (size_t i = 0; i < unknown_parameters.size(); ++i) {
+    if (i > 0) json += ",";
+    json += "\"" + jsonEscape(unknown_parameters[i]) + "\"";
+  }
+  json += "]}";
+  
+  return json;
+}
+
+// Encode a monero: URI
+// Args: address, paymentId, amount (atomic string), txDescription, recipientName, nettype
+// Returns: URI string, or JSON with error field on failure
+std::string encodeUri(const std::vector<const std::string> &args) {
+  std::string address = args[0];
+  std::string payment_id = args[1];
+  std::string amount_str = args[2];
+  std::string tx_description = args[3];
+  std::string recipient_name = args[4];
+  int nettype = std::stoi(args[5]);
+  cryptonote::network_type network = static_cast<cryptonote::network_type>(nettype);
+  
+  // Validate address
+  cryptonote::address_parse_info info;
+  if (!cryptonote::get_account_address_from_str(info, network, address)) {
+    return "{\"error\":\"wrong address: " + jsonEscape(address) + "\"}";
+  }
+  
+  // Check payment id constraints
+  if (info.has_payment_id && !payment_id.empty()) {
+    return "{\"error\":\"A single payment id is allowed\"}";
+  }
+  if (!payment_id.empty()) {
+    return "{\"error\":\"Standalone payment id deprecated, use integrated address instead\"}";
+  }
+  
+  // Parse amount
+  uint64_t amount = 0;
+  if (!amount_str.empty() && amount_str != "0") {
+    try {
+      amount = std::stoull(amount_str);
+    } catch (...) {
+      return "{\"error\":\"Invalid amount: " + jsonEscape(amount_str) + "\"}";
+    }
+  }
+  
+  // Build URI
+  std::string uri = "monero:" + address;
+  unsigned int n_fields = 0;
+  
+  if (amount > 0) {
+    // URI encoded amount is in decimal units, not atomic units
+    uri += (n_fields++ ? "&" : "?") + std::string("tx_amount=") + cryptonote::print_money(amount);
+  }
+  
+  if (!recipient_name.empty()) {
+    uri += (n_fields++ ? "&" : "?") + std::string("recipient_name=") + epee::net_utils::conver_to_url_format(recipient_name);
+  }
+  
+  if (!tx_description.empty()) {
+    uri += (n_fields++ ? "&" : "?") + std::string("tx_description=") + epee::net_utils::conver_to_url_format(tx_description);
+  }
+  
+  return uri;
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
@@ -599,6 +773,8 @@ const MoneroMethod moneroMethods[] = {
   { "closeWallet", 1, closeWallet },
   { "createTransaction", 5, createTransaction },
   { "broadcastTransaction", 3, broadcastTransaction },
+  { "parseUri", 2, parseUri },
+  { "encodeUri", 6, encodeUri },
 };
 
 const unsigned moneroMethodCount = std::end(moneroMethods) - std::begin(moneroMethods);
