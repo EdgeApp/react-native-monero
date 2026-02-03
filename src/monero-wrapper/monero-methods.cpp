@@ -14,6 +14,8 @@
 
 /** Lower-level utilities for key generation without disk I/O. */
 #include "cryptonote_basic/account.h"
+#include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "mnemonics/electrum-words.h"
 #include "string_tools.h"
 
@@ -618,6 +620,93 @@ std::string broadcastTransaction(const std::vector<const std::string> &args) {
   return "success";
 }
 
+/** Helper: escape a string for JSON (escape backslash and double-quote). */
+static std::string jsonEscape(const std::string& s) {
+  std::string result;
+  result.reserve(s.size());
+  for (char c : s) {
+    if (c == '\\') result += "\\\\";
+    else if (c == '"') result += "\\\"";
+    else if (c == '\n') result += "\\n";
+    else if (c == '\r') result += "\\r";
+    else if (c == '\t') result += "\\t";
+    else result += c;
+  }
+  return result;
+}
+
+/**
+ * Parse a monero: URI.
+ * Args: uri, nettype
+ * Returns: JSON with address, paymentId, amount, txDescription, recipientName, unknownParameters
+ * or JSON with error field on failure
+ */
+std::string parseUri(const std::vector<const std::string> &args) {
+  std::string uri = args[0];
+  int nettype = std::stoi(args[1]);
+  Monero::Wallet* wallet = findWalletByNettype(nettype);
+
+  std::string address;
+  std::string paymentId;
+  uint64_t amount = 0;
+  std::string txDescription;
+  std::string recipientName;
+  std::vector<std::string> unknownParameters;
+  std::string error;
+
+  if (!wallet->parse_uri(uri, address, paymentId, amount, txDescription, recipientName, unknownParameters, error)) {
+    return "{\"error\":\"" + jsonEscape(error) + "\"}";
+  }
+
+  std::string json = "{";
+  json += "\"address\":\"" + jsonEscape(address) + "\",";
+  json += "\"paymentId\":\"" + jsonEscape(paymentId) + "\",";
+  json += "\"amount\":\"" + std::to_string(amount) + "\",";
+  json += "\"txDescription\":\"" + jsonEscape(txDescription) + "\",";
+  json += "\"recipientName\":\"" + jsonEscape(recipientName) + "\",";
+  json += "\"unknownParameters\":[";
+  for (size_t i = 0; i < unknownParameters.size(); ++i) {
+    if (i > 0) json += ",";
+    json += "\"" + jsonEscape(unknownParameters[i]) + "\"";
+  }
+  json += "]}";
+
+  return json;
+}
+
+/**
+ * Encode a monero: URI.
+ * Args: address, paymentId, amount (atomic string), txDescription, recipientName, nettype
+ * Returns: URI string, or JSON with error field on failure
+ */
+std::string encodeUri(const std::vector<const std::string> &args) {
+  std::string address = args[0];
+  std::string paymentId = args[1];
+  std::string amountStr = args[2];
+  std::string txDescription = args[3];
+  std::string recipientName = args[4];
+  int nettype = std::stoi(args[5]);
+  Monero::Wallet* wallet = findWalletByNettype(nettype);
+
+  uint64_t amount = 0;
+  if (!amountStr.empty() && amountStr != "0") {
+    try {
+      amount = std::stoull(amountStr);
+    } catch (...) {
+      return "{\"error\":\"Invalid amount: " + jsonEscape(amountStr) + "\"}";
+    }
+  }
+
+  std::string error;
+  std::string uri = wallet->make_uri(address, paymentId, amount, txDescription, recipientName, error);
+
+  if (uri.empty()) {
+    return "{\"error\":\"" + jsonEscape(error) + "\"}";
+  }
+
+  return uri;
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
@@ -630,6 +719,8 @@ const MoneroMethod moneroMethods[] = {
   { "closeWallet", 1, closeWallet },
   { "createTransaction", 5, createTransaction },
   { "broadcastTransaction", 3, broadcastTransaction },
+  { "parseUri", 2, parseUri },
+  { "encodeUri", 6, encodeUri },
 };
 
 const unsigned moneroMethodCount = std::end(moneroMethods) - std::begin(moneroMethods);
