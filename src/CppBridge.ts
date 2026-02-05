@@ -277,4 +277,14 @@ export class CppBridge {
     }
     return response
   }
+
+  /**
+   * Set the API key for LWS (Light Wallet Server) requests.
+   * Once set, the key will be included in all subsequent LWS HTTP POST requests
+   * as an "api_key" field in the JSON body.
+   * @param apiKey - The API key to include in LWS requests
+   */
+  async setLwsApiKey(apiKey: string): Promise<void> {
+    await this.module.callMonero('setLwsApiKey', [apiKey])
+  }
 }
