@@ -20,6 +20,11 @@
 #include "net/abstract_http_client.h"
 #include <boost/algorithm/string.hpp>
 
+// Forward declaration for LWSF api_key support (defined in patched rpc.cpp)
+namespace lwsf { namespace config {
+  void set_api_key(const std::string& k);
+}}
+
 // Counter for unique temp file names
 static uint64_t g_tx_file_counter = 0;
 
@@ -761,6 +766,15 @@ std::string encodeUri(const std::vector<const std::string> &args) {
   return uri;
 }
 
+// Set the API key for LWS requests
+// Args: apiKey
+// Returns: "ok"
+std::string setLwsApiKey(const std::vector<const std::string> &args) {
+  std::string api_key = args[0];
+  lwsf::config::set_api_key(api_key);
+  return "ok";
+}
+
 const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
@@ -775,6 +789,7 @@ const MoneroMethod moneroMethods[] = {
   { "broadcastTransaction", 3, broadcastTransaction },
   { "parseUri", 2, parseUri },
   { "encodeUri", 6, encodeUri },
+  { "setLwsApiKey", 1, setLwsApiKey },
 };
 
 const unsigned moneroMethodCount = std::end(moneroMethods) - std::begin(moneroMethods);

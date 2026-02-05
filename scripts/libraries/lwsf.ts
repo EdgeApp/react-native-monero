@@ -72,6 +72,66 @@ export const lwsf = defineLib({
   hash: 'cedb2164f9ccd418b91a4e54ee8479c8d5c3cad0', // Nov 7, 2025
 
   async build(build, platform, prefixPath) {
+    // Patch rpc.cpp to support api_key injection in HTTP requests
+    const rpcPath = join(build.cwd, 'src/rpc.cpp')
+    const rpcCpp = await readFile(rpcPath, 'utf8')
+    await writeFile(
+      rpcPath,
+      rpcCpp
+        // Add api_key storage after includes
+        .replace(
+          '#include "wire/wrappers_impl.h"',
+          `#include "wire/wrappers_impl.h"
+
+// API key storage for request injection (added by react-native build)
+namespace lwsf { namespace config {
+  static std::string g_api_key;
+  const std::string& api_key() { return g_api_key; }
+  void set_api_key(const std::string& k) { g_api_key = k; }
+}}`
+        )
+        // Modify invoke_payload to inject api_key into JSON body
+        .replace(
+          `expect<std::string> invoke_payload(http_client& client, const boost::string_ref endpoint, const epee::byte_slice payload)
+  {
+    static const epee::net_utils::http::fields_list headers{
+      {"Content-Type", "application/json; charset=utf-8"}
+    };
+
+    const epee::net_utils::http::http_response_info* response = nullptr;
+    if (!client.invoke(endpoint, "POST", {reinterpret_cast<const char*>(payload.data()), payload.size()}, config::rpc_timeout, std::addressof(response), headers))
+      return {error::no_response};`,
+          `expect<std::string> invoke_payload(http_client& client, const boost::string_ref endpoint, epee::byte_slice payload)
+  {
+    static const epee::net_utils::http::fields_list headers{
+      {"Content-Type", "application/json; charset=utf-8"}
+    };
+
+    // Inject api_key if set (added by react-native build)
+    std::string body_str;
+    const std::string& key = config::api_key();
+    if (!key.empty()) {
+      std::string original(reinterpret_cast<const char*>(payload.data()), payload.size());
+      size_t pos = original.rfind('}');
+      if (pos != std::string::npos && pos > 0) {
+        body_str = original.substr(0, pos);
+        if (original[pos-1] != '{') body_str += ",";
+        body_str += "\\"api_key\\":\\"" + key + "\\"}";
+      } else {
+        body_str = original;
+      }
+    } else {
+      body_str.assign(reinterpret_cast<const char*>(payload.data()), payload.size());
+    }
+
+    const epee::net_utils::http::http_response_info* response = nullptr;
+    if (!client.invoke(endpoint, "POST", body_str, config::rpc_timeout, std::addressof(response), headers))
+      return {error::no_response};`
+        ),
+      'utf8'
+    )
+    build.log('Patched rpc.cpp for api_key support')
+
     build.exportEnv({
       PKG_CONFIG_PATH: join(prefixPath, '/lib/pkgconfig')
     })
