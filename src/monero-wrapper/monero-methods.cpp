@@ -28,6 +28,24 @@ namespace lwsf { namespace config {
 // Counter for unique temp file names
 static uint64_t g_tx_file_counter = 0;
 
+// --- Global wallet-event callback (thread-safe) ---
+static std::mutex g_eventCbMutex;
+static WalletEventCallback g_walletEventCallback;
+
+void setWalletEventCallback(WalletEventCallback cb) {
+  std::lock_guard<std::mutex> lock(g_eventCbMutex);
+  g_walletEventCallback = std::move(cb);
+}
+
+static void emitWalletEvent(const std::string& walletId,
+                            const std::string& eventName,
+                            const std::string& jsonPayload) {
+  std::lock_guard<std::mutex> lock(g_eventCbMutex);
+  if (g_walletEventCallback) {
+    g_walletEventCallback(walletId, eventName, jsonPayload);
+  }
+}
+
 std::string hello(const std::vector<const std::string> &args) {
   printf("LWSF says hello\n");
   return "hello";
@@ -36,12 +54,18 @@ std::string hello(const std::vector<const std::string> &args) {
 // WalletListener implementation - handles wallet events and auto-saves during sync
 class WalletListeners : public Monero::WalletListener {
 public:
-  WalletListeners(Monero::Wallet* wallet) : m_wallet(wallet), m_lastSaveHeight(0) {}
+  WalletListeners(Monero::Wallet* wallet, const std::string& walletId)
+    : m_wallet(wallet), m_walletId(walletId), m_lastSaveHeight(0) {}
   virtual ~WalletListeners() {}
   
   void moneySpent(const std::string &txId, uint64_t amount) override {}
+
   void moneyReceived(const std::string &txId, uint64_t amount) override {}
-  void unconfirmedMoneyReceived(const std::string &txId, uint64_t amount) override {}
+
+  void unconfirmedMoneyReceived(const std::string &txId, uint64_t amount) override {
+    emitWalletEvent(m_walletId, "unconfirmedMoneyReceived",
+      "{\"txId\":\"" + txId + "\",\"amount\":" + std::to_string(amount) + "}");
+  }
   
   void newBlock(uint64_t height) override {
     // Save progress every 1000 blocks during INITIAL sync only.
@@ -78,6 +102,7 @@ public:
 
 private:
   Monero::Wallet* m_wallet;
+  std::string m_walletId;
   uint64_t m_lastSaveHeight;
 };
 
@@ -298,8 +323,8 @@ std::string openWallet(const std::vector<const std::string> &args) {
   bool is_lws = (backend == "lws");
   wallet->init(daemon_address, 0, "", "", false, is_lws, "");
 
-  // Create and set listener for auto-save on refresh completion
-  WalletListeners* listener = new WalletListeners(wallet);
+  // Create and set listener for auto-save on refresh completion + event emission
+  WalletListeners* listener = new WalletListeners(wallet, wallet_id);
   wallet->setListener(listener);
 
   // Start background refresh

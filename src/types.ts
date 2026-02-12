@@ -102,3 +102,13 @@ export interface EncodeUriParams {
   txDescription?: string
   recipientName?: string
 }
+
+// Wallet event names emitted by the native WalletListener
+export type WalletEventName = 'unconfirmedMoneyReceived'
+
+// Payload delivered by "MoneroWalletEvent" NativeEventEmitter events
+export interface WalletEventData {
+  walletId: string
+  eventName: WalletEventName
+  data: string // JSON string: { txId: string, amount: number }
+}
