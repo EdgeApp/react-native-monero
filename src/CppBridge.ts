@@ -181,6 +181,25 @@ export class CppBridge {
   }
 
   /**
+   * Delete a wallet's files from disk. Closes the wallet first if it's open.
+   * @param walletId - Unique identifier for the wallet
+   * @param backend - Backend type ('lws' or 'monerod')
+   */
+  async deleteWallet(walletId: string, backend: WalletBackend): Promise<void> {
+    const response = await this.module.callMonero('deleteWallet', [
+      this.module.documentDirectory,
+      walletId,
+      backend
+    ])
+    if (response !== 'ok') {
+      const parsed = JSON.parse(response)
+      if (typeof parsed === 'object' && 'error' in parsed) {
+        throw new Error(parsed.error)
+      }
+    }
+  }
+
+  /**
    * Get all transactions with pagination.
    * @param walletId - Unique identifier for the wallet
    * @param page - Page number (0-indexed)
