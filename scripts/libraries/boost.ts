@@ -59,7 +59,7 @@ export const boost = defineLib({
 <compileflags>-g
 <compileflags>-Oz
 `
-    if (platform.type === 'ios') {
+    if (platform.type !== 'android') {
       for (const arg of platform.sdkFlags.CXXFLAGS.split(' '))
         userConfig = userConfig + `<compileflags>${arg}\n`
       for (const arg of platform.sdkFlags.LDFLAGS.split(' '))
@@ -80,9 +80,15 @@ export const boost = defineLib({
       ...boostLibs.map(lib => `--with-${lib}`),
       'install',
       'link=static',
-      `target-os=${platform.type === 'ios' ? 'iphone' : platform.type}`,
+      `target-os=${getTargetOs(platform.type)}`,
       'threading=multi',
       `toolset=clang-nat1ve` // The tag needs to include a number
     ])
   }
 })
+
+function getTargetOs(platformType: 'android' | 'ios' | 'macos'): string {
+  if (platformType === 'ios') return 'iphone'
+  if (platformType === 'macos') return 'darwin'
+  return platformType
+}

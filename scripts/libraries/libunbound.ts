@@ -17,7 +17,7 @@ export const libunbound = defineLib({
       ...platform.tools,
       PKG_CONFIG_PATH: join(prefixPath, 'lib/pkgconfig')
     })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type !== 'android') build.exportEnv({ ...platform.sdkFlags })
 
     await build.exec('./configure', [
       '--enable-static',

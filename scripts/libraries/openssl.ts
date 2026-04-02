@@ -67,5 +67,14 @@ function getTarget(platform: Platform): string {
     }
   }
 
+  if (platform.type === 'macos') {
+    switch (platform.arch) {
+      case 'x86_64':
+        return 'darwin64-x86_64-cc'
+      case 'arm64':
+        return 'darwin64-arm64-cc'
+    }
+  }
+
   return ''
 }

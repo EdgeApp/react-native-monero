@@ -6,11 +6,12 @@ import { defineLib } from '../utils/lib'
 import { addTask } from '../utils/tasks'
 
 const moneroHash = '38bc62741b82cca179fb8e3437a388b0e0f67842' // Nov 7, 2025
+const moneroCacheTag = `${moneroHash}-macos-node-1`
 // const moneroHash = '1c9686cb45bec8cd1ca5142426b9ea9458ac4384' // Last compatible version?
 
 addTask({
   name: 'monero.clone',
-  cacheTag: moneroHash,
+  cacheTag: moneroCacheTag,
   async run(build) {
     await getRepo(
       'monero',
@@ -54,6 +55,10 @@ addTask({
         .replace(
           '#include <IOKit/ps/IOPowerSources.h>',
           '// $& # Disabled by react-native build'
+        )
+        .replace(
+          '        return boost::logic::tribool(IOPSGetTimeRemainingEstimate() != kIOPSTimeRemainingUnlimited);',
+          '        return boost::logic::tribool(boost::logic::indeterminate); // Disabled by react-native build'
         ),
       'utf8'
     )
@@ -146,7 +151,7 @@ namespace lwsf { namespace config {
       `-DCMAKE_BUILD_TYPE=Release`,
       `-DCMAKE_CXX_FLAGS=-DLWSF_MASTER_ENABLE`,
       `-DCMAKE_C_FLAGS=-D_DARWIN_C_SOURCE`,
-      `-DCMAKE_FIND_ROOT_PATH=${prefixPath};${platform.sysroot}"`,
+      `-DCMAKE_FIND_ROOT_PATH=${prefixPath};${platform.sysroot}`,
       `-DCMAKE_INSTALL_PREFIX=${prefixPath}`,
       `-DCMAKE_PREFIX_PATH=${prefixPath}`,
       `-DMONERO_SOURCE_DIR=${join(build.basePath, 'monero')}`,

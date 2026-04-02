@@ -14,7 +14,7 @@ export const libexpat = defineLib({
     build.cd(join(build.cwd, 'expat'))
 
     build.exportEnv({ ...platform.tools })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type !== 'android') build.exportEnv({ ...platform.sdkFlags })
 
     await build.exec('./buildconf.sh')
     await build.exec('./configure', [

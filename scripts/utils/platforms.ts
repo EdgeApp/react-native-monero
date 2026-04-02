@@ -72,7 +72,14 @@ export interface IosPlatform extends CommonPlatform {
   sdkFlags: ToolFlags
 }
 
-export type Platform = AndroidPlatform | IosPlatform
+export interface MacosPlatform extends CommonPlatform {
+  type: 'macos'
+  sdk: 'macosx'
+  version: string
+  sdkFlags: ToolFlags
+}
+
+export type Platform = AndroidPlatform | IosPlatform | MacosPlatform
 
 export const makePlatforms = async (): Promise<Platform[]> => [
   ...(await makeAndroidPlatforms()),
@@ -216,4 +223,43 @@ export async function makeIosPlatforms(): Promise<IosPlatform[]> {
     })
   }
   return out
+}
+
+export async function makeMacosPlatforms(): Promise<MacosPlatform[]> {
+  const sdk = 'macosx'
+  const version = '13.0'
+  const arch = process.arch === 'x64' ? 'x86_64' : 'arm64'
+  const sysroot = await quietExec('xcrun', ['--sdk', sdk, '--show-sdk-path'])
+  const cflags = `-arch ${arch} -mmacosx-version-min=${version} -isysroot ${sysroot}`
+
+  return [
+    {
+      type: 'macos',
+      sdk,
+      version,
+      sdkFlags: {
+        CFLAGS: cflags,
+        CPPFLAGS: `-isysroot ${sysroot}`,
+        CXXFLAGS: cflags,
+        LDFLAGS: `-isysroot ${sysroot}`
+      },
+      arch,
+      name: `macos-${arch}`,
+      cmakeFlags: [
+        `-DCMAKE_OSX_ARCHITECTURES=${arch}`,
+        `-DCMAKE_OSX_DEPLOYMENT_TARGET=${version}`,
+        `-DCMAKE_OSX_SYSROOT=${sysroot}`
+      ],
+      sysroot,
+      tools: {
+        AR: await quietExec('xcrun', ['--sdk', sdk, '--find', 'ar']),
+        CC: await quietExec('xcrun', ['--sdk', sdk, '--find', 'clang']),
+        CXX: await quietExec('xcrun', ['--sdk', sdk, '--find', 'clang++']),
+        LD: await quietExec('xcrun', ['--sdk', sdk, '--find', 'clang++']),
+        RANLIB: await quietExec('xcrun', ['--sdk', sdk, '--find', 'ranlib']),
+        OBJCOPY: await getObjcopyPath()
+      },
+      triple: `${arch}-apple-darwin`
+    }
+  ]
 }

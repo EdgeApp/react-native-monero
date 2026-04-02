@@ -14,24 +14,29 @@
   "files": [
     "/android/build.gradle",
     "/android/src/",
+    "/binding.gyp",
     "/CHANGELOG.md",
     "/ios/",
     "/lib/src/",
     "/package.json",
     "/react-native-monero-lwsf.podspec",
     "/README.md",
+    "/scripts/",
+    "/src/node-addon.cpp",
     "/src/monero-wrapper/monero-methods.hpp"
   ],
   "lint-staged": {
     "*.{js,ts}": "eslint"
   },
   "scripts": {
+    "build-node": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-node.ts",
     "fix": "npm run lint -- --fix",
     "lint": "eslint .",
     "prepack": "npm run build-native",
     "prepare": "husky && lint-staged && rimraf lib && tsc",
     "precommit": "npm run lint",
-    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts"
+    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts",
+    "test-node": "node -r sucrase/register ./scripts/test-node.ts"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
@@ -39,6 +44,7 @@
     "eslint-config-standard-kit": "^1.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.6",
+    "node-gyp": "^11.5.0",
     "prettier": "^3.6.2",
     "rimraf": "^6.1.0",
     "sucrase": "^3.35.0",

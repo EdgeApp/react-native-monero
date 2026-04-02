@@ -12,7 +12,7 @@ export const libsodium = defineLib({
     build.exportEnv({ ...platform.tools })
 
     build.exportEnv({ ...platform.tools })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type !== 'android') build.exportEnv({ ...platform.sdkFlags })
 
     await build.exec('./configure', [
       '--enable-static',

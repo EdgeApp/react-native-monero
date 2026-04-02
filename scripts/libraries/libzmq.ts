@@ -17,7 +17,12 @@ export const libzmq = defineLib({
       ...platform.tools,
       PKG_CONFIG_PATH: join(prefixPath, 'lib/pkgconfig')
     })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type !== 'android') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type === 'macos') {
+      build.exportEnv({
+        CXXFLAGS: `${platform.sdkFlags.CXXFLAGS} -Wno-error=missing-braces`
+      })
+    }
 
     await build.exec('./autogen.sh')
     await build.exec('./configure', [
