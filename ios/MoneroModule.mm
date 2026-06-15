@@ -1,11 +1,63 @@
 #import "MoneroModule.h"
 #include "monero-methods.hpp"
 
+@interface MoneroModule () {
+  dispatch_queue_t _moneroQueue;
+  dispatch_queue_t _nymCompletionQueue;
+}
+@end
+
+static bool isNymCompletionMethod(const std::string& method) {
+  return method == "resolveFetch" || method == "rejectFetch";
+}
+
+// Global pointer so the C++ callback can reach the ObjC module instance
+static __weak MoneroModule* g_module = nil;
+
 @implementation MoneroModule
 
-RCT_EXPORT_MODULE();
+RCT_EXPORT_MODULE(MoneroLwsfModule);
 
 + (BOOL)requiresMainQueueSetup { return NO; }
+
+- (instancetype)init {
+  self = [super init];
+  if (self) {
+    g_module = self;
+    _moneroQueue = dispatch_queue_create(
+      "app.edge.rnmonero.monero", DISPATCH_QUEUE_SERIAL);
+    _nymCompletionQueue = dispatch_queue_create(
+      "app.edge.rnmonero.nymCompletion", DISPATCH_QUEUE_SERIAL);
+
+    // Wire the C++ wallet-event callback to this module's event emitter
+    moneroSetEventCallback([](const std::string& walletId,
+                              const std::string& eventName,
+                              const std::string& jsonPayload) {
+      MoneroModule* module = g_module;
+      if (module == nil) return;
+
+      NSString *nsWalletId  = [NSString stringWithUTF8String:walletId.c_str()];
+      NSString *nsEventName = [NSString stringWithUTF8String:eventName.c_str()];
+      NSString *nsPayload   = [NSString stringWithUTF8String:jsonPayload.c_str()];
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [module sendEventWithName:@"MoneroWalletEvent" body:@{
+          @"walletId":  nsWalletId,
+          @"eventName": nsEventName,
+          @"data":      nsPayload
+        }];
+      });
+    });
+  }
+  return self;
+}
+
+- (NSArray<NSString *> *)supportedEvents {
+  return @[@"MoneroWalletEvent"];
+}
+
+- (void)startObserving {}
+- (void)stopObserving {}
 
 RCT_REMAP_METHOD(
   callMonero,
@@ -18,7 +70,7 @@ RCT_REMAP_METHOD(
 
   // Re-package the arguments:
   NSUInteger length = [arguments count];
-  std::vector<const std::string> strings;
+  std::vector<std::string> strings;
   strings.reserve(length);
   for (NSUInteger i = 0; i < length; ++i) {
     NSString *string = [arguments objectAtIndex:i];
@@ -35,21 +87,26 @@ RCT_REMAP_METHOD(
       return;
     }
 
-    // Call the method, with error handling:
-    try {
-      const std::string out = moneroMethods[i].method(strings);
-      resolve(
-        [NSString stringWithCString:out.c_str() encoding:NSUTF8StringEncoding]
-      );
-    } catch (std::exception &e) {
-      reject(
-        @"Error",
-        [NSString stringWithCString:e.what() encoding:NSUTF8StringEncoding],
-        nil
-      );
-    } catch (...) {
-      reject(@"Error", @"monero threw a C++ exception", nil);
-    }
+    const MoneroMethod methodInfo = moneroMethods[i];
+    dispatch_queue_t queue =
+      isNymCompletionMethod(methodString) ? _nymCompletionQueue : _moneroQueue;
+    dispatch_async(queue, ^{
+      // Call the method, with error handling:
+      try {
+        const std::string out = methodInfo.method(strings);
+        resolve(
+          [NSString stringWithCString:out.c_str() encoding:NSUTF8StringEncoding]
+        );
+      } catch (std::exception &e) {
+        reject(
+          @"Error",
+          [NSString stringWithCString:e.what() encoding:NSUTF8StringEncoding],
+          nil
+        );
+      } catch (...) {
+        reject(@"Error", @"monero threw a C++ exception", nil);
+      }
+    });
     return;
   }
 

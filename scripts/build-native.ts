@@ -42,7 +42,10 @@ const ffi = defineLib({
   async build(build, platform, prefixPath) {
     // Source list (from src/):
     const srcPath = join(__dirname, '../src')
-    const sources: string[] = ['monero-wrapper/monero-methods.cpp']
+    const sources: string[] = [
+      'monero-wrapper/monero-methods.cpp',
+      'monero-wrapper/nym-fetch.cpp'
+    ]
 
     // LWSF builds a *ton* of libraries,
     // but doesn't install them in the normal place:
@@ -56,7 +59,9 @@ const ffi = defineLib({
     const includePaths = [
       join(prefixPath, 'include'),
       join(lwsfPath, 'include'),
-      join(build.basePath, 'monero/src')
+      join(build.basePath, 'monero/src'),
+      join(build.basePath, 'monero/contrib/epee/include'),
+      join(build.basePath, 'monero/external/easylogging++')
     ]
     const libPaths = [join(prefixPath, 'lib')]
     const libs = [
@@ -73,6 +78,9 @@ const ffi = defineLib({
 
     if (platform.type === 'android') {
       sources.push('jni/jni.cpp')
+    }
+    if (platform.type === 'ios') {
+      sources.push('clear_cache_stub.c')
     }
 
     // Compile our sources:
@@ -94,7 +102,7 @@ const ffi = defineLib({
           : ''
       await build.exec(useCxx ? platform.tools.CXX : platform.tools.CC, [
         '-c',
-        '-std=c++17',
+        ...(useCxx ? ['-std=c++17'] : []),
         ...sdkFlags.split(' '),
         ...includePaths.map(path => `-I${path}`),
         `-o${object}`,
@@ -122,7 +130,8 @@ const ffi = defineLib({
         '-w',
         '-L*',
         '-L!_moneroMethods',
-        '-L!_moneroMethodCount'
+        '-L!_moneroMethodCount',
+        '-L!*moneroSetEventCallback*'
       ])
 
       // Generate a static library:
