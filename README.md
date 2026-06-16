@@ -1,4 +1,4 @@
-# react-native-monero-lwsf
+# react-native-monero
 
 This library packages Monero C++ client for use on React Native.
 
@@ -14,7 +14,7 @@ First, add this library to your React Native app using NPM or Yarn, and run `pod
 Here is a simple usage example:
 
 ```js
-import { what } from 'react-native-monero-lwsf'
+import { what } from 'react-native-monero'
 
 // ???
 ```
@@ -33,7 +33,7 @@ This script does the following tasks:
 - Compile shared libraries for Android.
 - Compile an iOS universal static library and put it into an XCFramework.
 
-The `build-native` script is also the place to make edits when upgrading any of the third-party dependencies. The react-native-monero-lwsf repo doesn't include these third-party C++ sources, since they are enormous.
+The `build-native` script is also the place to make edits when upgrading any of the third-party dependencies. The react-native-monero repo doesn't include these third-party C++ sources, since they are enormous.
 
 For this to work, you need:
 

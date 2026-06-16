@@ -1,1 +1,1 @@
-# react-native-monero-lwsf
+# react-native-monero
