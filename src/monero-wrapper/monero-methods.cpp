@@ -459,18 +459,21 @@ std::string getWalletStatus(const std::vector<std::string> &args) {
   Monero::Wallet* wallet = entry.wallet;
   
   uint64_t syncedHeight = wallet->blockChainHeight();
-  bool heightChanged = (syncedHeight != entry.cachedSyncedHeight);
-  
-  if (heightChanged) {
-    entry.cachedBalance = wallet->balanceAll();
-    entry.cachedUnlockedBalance = wallet->unlockedBalanceAll();
-    entry.cachedSyncedHeight = syncedHeight;
-  }
-
   uint64_t networkHeight = wallet->daemonBlockChainHeight();
-  uint64_t balance = entry.cachedBalance;
-  uint64_t unlockedBalance = entry.cachedUnlockedBalance;
-  
+
+  // Always read the live balance. A pending incoming transaction, or the
+  // pending change after a send, does not advance blockChainHeight, so gating
+  // the recompute on a height change left the reported balance stale (showing
+  // a just-received pending amount as 0) until the next block arrived.
+  // balanceAll()/unlockedBalanceAll() read wallet2's in-memory transfer state
+  // and are inexpensive relative to the sync poll cadence.
+  uint64_t balance = wallet->balanceAll();
+  uint64_t unlockedBalance = wallet->unlockedBalanceAll();
+
+  entry.cachedSyncedHeight = syncedHeight;
+  entry.cachedBalance = balance;
+  entry.cachedUnlockedBalance = unlockedBalance;
+
   std::string json = "{";
   json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
   json += "\"networkHeight\":" + std::to_string(networkHeight) + ",";
