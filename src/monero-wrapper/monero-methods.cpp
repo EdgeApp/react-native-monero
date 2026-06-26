@@ -415,7 +415,14 @@ std::string openWallet(const std::vector<std::string> &args) {
   }
   
   bool isLws = (backend == "lws");
-  wallet->init(daemonAddress, 0, "", "", false, isLws, "");
+  // Derive SSL from the daemon address scheme. Passing use_ssl=false for an
+  // https daemon works on the direct epee client (it autodetects the scheme
+  // from the address) but breaks the Nym path: the NymHttpClient rebuilds the
+  // request URL from this flag and would emit http:// on port 443, so every
+  // monerod RPC fails under Nym. Honor the scheme here so it is correct on
+  // both paths and per-wallet.
+  bool useSsl = daemonAddress.rfind("https://", 0) == 0;
+  wallet->init(daemonAddress, 0, "", "", useSsl, isLws, "");
 
   auto listener = std::make_unique<WalletListeners>(wallet, walletId);
   wallet->setListener(listener.get());
