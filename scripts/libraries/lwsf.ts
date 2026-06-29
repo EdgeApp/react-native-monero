@@ -167,7 +167,15 @@ private:
     // Monerod wallet2 calls carry their target through set_server(), so
     // use that per-client state instead of the global LWSF base URL.
     if (m_host.empty()) return false;
-    std::string base = (m_use_https ? "https://" : "http://") + m_host;
+    // wallet2 re-issues set_server() with autodetect SSL during sync, so
+    // m_use_https is unreliable and would emit http:// on port 443, breaking
+    // every monerod RPC under Nym (sync, fee/output queries, broadcast). The
+    // non-Nym epee client keeps the scheme from the daemon address, which is
+    // why monerod works with Nym off but not on. Treat the standard HTTPS port
+    // as https; openWallet also seeds use_ssl from the daemon scheme, covering
+    // https daemons on non-standard ports.
+    const bool use_https = m_use_https || m_port == "443";
+    std::string base = (use_https ? "https://" : "http://") + m_host;
     if (!m_port.empty()) base += ":" + m_port;
     std::string path(uri.data(), uri.size());
     if (path.empty() || path.front() != '/') path.insert(path.begin(), '/');

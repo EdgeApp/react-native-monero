@@ -415,7 +415,14 @@ std::string openWallet(const std::vector<std::string> &args) {
   }
   
   bool isLws = (backend == "lws");
-  wallet->init(daemonAddress, 0, "", "", false, isLws, "");
+  // Derive SSL from the daemon address scheme. Passing use_ssl=false for an
+  // https daemon works on the direct epee client (it autodetects the scheme
+  // from the address) but breaks the Nym path: the NymHttpClient rebuilds the
+  // request URL from this flag and would emit http:// on port 443, so every
+  // monerod RPC fails under Nym. Honor the scheme here so it is correct on
+  // both paths and per-wallet.
+  bool useSsl = daemonAddress.rfind("https://", 0) == 0;
+  wallet->init(daemonAddress, 0, "", "", useSsl, isLws, "");
 
   auto listener = std::make_unique<WalletListeners>(wallet, walletId);
   wallet->setListener(listener.get());
@@ -459,18 +466,21 @@ std::string getWalletStatus(const std::vector<std::string> &args) {
   Monero::Wallet* wallet = entry.wallet;
   
   uint64_t syncedHeight = wallet->blockChainHeight();
-  bool heightChanged = (syncedHeight != entry.cachedSyncedHeight);
-  
-  if (heightChanged) {
-    entry.cachedBalance = wallet->balanceAll();
-    entry.cachedUnlockedBalance = wallet->unlockedBalanceAll();
-    entry.cachedSyncedHeight = syncedHeight;
-  }
-
   uint64_t networkHeight = wallet->daemonBlockChainHeight();
-  uint64_t balance = entry.cachedBalance;
-  uint64_t unlockedBalance = entry.cachedUnlockedBalance;
-  
+
+  // Always read the live balance. A pending incoming transaction, or the
+  // pending change after a send, does not advance blockChainHeight, so gating
+  // the recompute on a height change left the reported balance stale (showing
+  // a just-received pending amount as 0) until the next block arrived.
+  // balanceAll()/unlockedBalanceAll() read wallet2's in-memory transfer state
+  // and are inexpensive relative to the sync poll cadence.
+  uint64_t balance = wallet->balanceAll();
+  uint64_t unlockedBalance = wallet->unlockedBalanceAll();
+
+  entry.cachedSyncedHeight = syncedHeight;
+  entry.cachedBalance = balance;
+  entry.cachedUnlockedBalance = unlockedBalance;
+
   std::string json = "{";
   json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
   json += "\"networkHeight\":" + std::to_string(networkHeight) + ",";
