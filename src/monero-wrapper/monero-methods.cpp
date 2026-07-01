@@ -485,14 +485,19 @@ std::string openWallet(const std::vector<std::string> &args) {
   }
   
   bool isLws = (backend == "lws");
-  // Derive SSL from the daemon address scheme. Passing use_ssl=false for an
-  // https daemon works on the direct epee client (it autodetects the scheme
-  // from the address) but breaks the Nym path: the NymHttpClient rebuilds the
-  // request URL from this flag and would emit http:// on port 443, so every
-  // monerod RPC fails under Nym. Honor the scheme here so it is correct on
-  // both paths and per-wallet.
-  bool useSsl = daemonAddress.rfind("https://", 0) == 0;
-  wallet->init(daemonAddress, 0, "", "", useSsl, isLws, "");
+  // Always pass use_ssl=false here; the backends derive TLS from the address
+  // scheme instead. wallet2 drops this flag entirely (WalletImpl::doInit calls
+  // wallet2::init without it, which defaults to ssl_support_autodetect), so it
+  // never affected monerod. lwsf DOES honor it: true selects
+  // ssl_support_enabled, whose certificate verification hard-fails on iOS and
+  // Android (no OpenSSL system CA store in the app sandbox), silently dropping
+  // every LWS connection at the TLS handshake, so LWS wallets polled forever
+  // with networkHeight 0 (regression shipped in 0.2.0). false keeps lwsf on
+  // ssl_support_autodetect: TLS is still used for https:// addresses, with
+  // tolerant verification, the long-standing epee behavior. The Nym path is
+  // unaffected either way: NymHttpClient derives its scheme from
+  // m_use_https || port 443, and lwsf-over-Nym bypasses epee TLS entirely.
+  wallet->init(daemonAddress, 0, "", "", false, isLws, "");
 
   auto listener = std::make_unique<WalletListeners>(wallet, walletId);
   wallet->setListener(listener.get());
