@@ -200,7 +200,11 @@ export class CppBridge {
 
   /**
    * Create a transaction (supports multiple recipients).
-   * The transaction is created and signed but not broadcast yet.
+   * The transaction is created and signed but not broadcast yet: it is retained
+   * natively for a later broadcastTransaction call. At most 50 transactions are
+   * retained per wallet (oldest disposed first — broadcasting an evicted one
+   * reports that it must be recreated), and all are released when the wallet
+   * closes.
    * @param walletId - Unique identifier for the wallet
    * @param recipients - Array of recipients with addresses and amounts (atomic units)
    * @param priority - Transaction priority (0=Default, 1=Low, 2=Medium, 3=High)
@@ -225,11 +229,13 @@ export class CppBridge {
   }
 
   /**
-   * Broadcast a previously created transaction.
+   * Broadcast a previously created transaction. `signedTx` identifies the
+   * natively retained transaction to broadcast.
    * @param walletId - Unique identifier for the wallet
-   * @param signedTx - The signed transaction string from createTransaction
-   * @returns The transaction hash
-   * @throws Error if broadcast fails
+   * @param signedTx - The signedTxHex returned by createTransaction
+   * @returns "success"
+   * @throws Error if the transaction is no longer retained (evicted, or the
+   *   wallet was closed since creation) or the broadcast fails
    */
   async broadcastTransaction(
     walletId: string,

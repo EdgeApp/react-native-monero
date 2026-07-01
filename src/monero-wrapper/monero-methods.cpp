@@ -179,6 +179,80 @@ struct WalletEntry {
  */
 static std::map<std::string, WalletEntry> g_wallets;
 
+/** A signed-but-not-yet-broadcast transaction and the wallet that owns it. */
+struct RetainedTx {
+  std::string walletId;
+  Monero::PendingTransaction* ptx;
+  uint64_t seq; // Insertion order, for FIFO eviction.
+};
+
+/**
+ * Signed transactions awaiting broadcast, keyed by the signedTx hex returned to
+ * JS from createTransaction.
+ *
+ * Edge signs a transaction in createTransaction and broadcasts it later in a
+ * separate broadcastTransaction call (after the user confirms). We retain the
+ * fully-signed PendingTransaction here and broadcast it directly, instead of
+ * serializing it to a file and reloading it in broadcastTransaction. The file
+ * round-trip is fundamentally broken on the full-node (wallet2) backend: its
+ * save_tx writes an *unsigned* tx set while submitTransaction's load_tx expects
+ * a *signed* one, so the magic prefixes never match and every full-node send
+ * fails with "Failed to load transaction from file". Broadcasting the retained
+ * PendingTransaction with commit("") works on both the LWS and full-node
+ * backends. Every createTransaction retains, including fee-estimation calls
+ * (getMaxSpendable) that never broadcast. Entries are disposed on broadcast,
+ * when the owning wallet is closed/deleted, or oldest-first once a wallet
+ * reaches MAX_RETAINED_TXS_PER_WALLET.
+ *
+ * Thread-safety: same serial-bridge-queue guarantee as g_wallets.
+ */
+static std::map<std::string, RetainedTx> g_retainedTxs;
+
+/** Monotonic counter stamping g_retainedTxs insertion order. */
+static uint64_t g_retainedTxSeq = 0;
+
+/**
+ * Cap on retained transactions per wallet. Several can be legitimately live at
+ * once (swap quoting fans out one makeSpend per partner before the user picks a
+ * quote), and abandoned ones — expired quotes, cancelled sends, fee
+ * estimations — linger until the wallet closes, so a long session with quote
+ * refreshes could otherwise grow without bound. Beyond the cap the oldest
+ * entry is disposed first; a caller broadcasting an evicted tx gets the
+ * explicit "recreate" error.
+ */
+static const size_t MAX_RETAINED_TXS_PER_WALLET = 50;
+
+/** Retain a signed tx for later broadcast, evicting oldest-first at the cap. */
+static void retainTx(const std::string& walletId, Monero::Wallet* wallet,
+                     const std::string& signedTxHex, Monero::PendingTransaction* ptx) {
+  size_t count = 0;
+  auto oldest = g_retainedTxs.end();
+  for (auto it = g_retainedTxs.begin(); it != g_retainedTxs.end(); ++it) {
+    if (it->second.walletId != walletId) continue;
+    ++count;
+    if (oldest == g_retainedTxs.end() || it->second.seq < oldest->second.seq) {
+      oldest = it;
+    }
+  }
+  if (count >= MAX_RETAINED_TXS_PER_WALLET) {
+    wallet->disposeTransaction(oldest->second.ptx);
+    g_retainedTxs.erase(oldest);
+  }
+  g_retainedTxs[signedTxHex] = RetainedTx{ walletId, ptx, ++g_retainedTxSeq };
+}
+
+/** Dispose and forget any retained transactions owned by the given wallet. */
+static void disposeRetainedTxs(const std::string& walletId, Monero::Wallet* wallet) {
+  for (auto it = g_retainedTxs.begin(); it != g_retainedTxs.end();) {
+    if (it->second.walletId == walletId) {
+      wallet->disposeTransaction(it->second.ptx);
+      it = g_retainedTxs.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 /** Helper to get wallet manager based on backend type. */
 static Monero::WalletManager* getWalletManager(const std::string& backend) {
   if (backend == "lws") {
@@ -503,8 +577,9 @@ std::string closeWallet(const std::vector<std::string> &args) {
 
   entry.wallet->setListener(nullptr);
 
+  disposeRetainedTxs(walletId, entry.wallet);
   manager->closeWallet(entry.wallet);
-  
+
   g_wallets.erase(walletId);
   
   return "ok";
@@ -525,6 +600,7 @@ std::string deleteWallet(const std::vector<std::string> &args) {
     WalletEntry& entry = it->second;
     Monero::WalletManager* manager = getWalletManager(entry.backend);
     entry.wallet->setListener(nullptr);
+    disposeRetainedTxs(walletId, entry.wallet);
     manager->closeWallet(entry.wallet);
     g_wallets.erase(it);
   }
@@ -622,7 +698,7 @@ std::string createTransaction(const std::vector<std::string> &args) {
   std::string amountsStr = args[2];
   int priority = std::stoi(args[3]);
   std::string documentDirectory = args[4];
-  
+
   WalletEntry& entry = findWalletOrThrow(walletId);
   Monero::Wallet* wallet = entry.wallet;
   
@@ -673,62 +749,75 @@ std::string createTransaction(const std::vector<std::string> &args) {
   
   std::string tempFile = documentDirectory + "/tx_" + std::to_string(++gTxFileCounter) + ".signed";
   
+  // Serialize the tx to an opaque hex token. This token is what Edge stores on
+  // the EdgeTransaction and hands back to broadcastTransaction, where it keys
+  // the retained PendingTransaction below. It is NOT reloaded to broadcast (see
+  // g_retainedTxs) — broadcasting reloaded bytes is exactly the broken full-node
+  // path we are avoiding.
   if (!ptx->commit(tempFile, true)) {
     std::string error = ptx->errorString();
     wallet->disposeTransaction(ptx);
     throw std::runtime_error("Failed to save transaction: " + error);
   }
-  
-  wallet->disposeTransaction(ptx);
-  
+
   std::ifstream file(tempFile, std::ios::binary);
   if (!file.is_open()) {
+    wallet->disposeTransaction(ptx);
     throw std::runtime_error("Failed to read signed transaction file");
   }
   std::string fileContents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   file.close();
-  
+
   std::remove(tempFile.c_str());
-  
+
   std::string signedTxHex = epee::string_tools::buff_to_hex_nodelimer(fileContents);
-  
+
+  // Keep the fully-signed transaction alive until broadcastTransaction. Callers
+  // that never broadcast (fee estimation) leave the entry to FIFO eviction or
+  // the wallet-close sweep.
+  retainTx(walletId, wallet, signedTxHex, ptx);
+
   return "{\"txid\":\"" + txHash + "\",\"signedTxHex\":\"" + signedTxHex + "\",\"fee\":\"" + std::to_string(fee) + "\"}";
 }
 
 /**
- * Broadcast a previously created transaction.
- * Args: walletId, signedTxHex (hex string from createTransaction), documentDirectory
- * Returns: "success" on success (txid is obtained from createTransaction result)
+ * Broadcast a previously created transaction. Broadcasts the retained
+ * PendingTransaction that createTransaction kept alive, looked up by its
+ * signedTxHex — it does NOT reload the tx from the hex bytes.
+ * Args: walletId, signedTxHex (from createTransaction), documentDirectory (unused)
+ * Returns: "success"
  */
 std::string broadcastTransaction(const std::vector<std::string> &args) {
   std::string walletId = args[0];
   std::string signedTxHex = args[1];
-  std::string documentDirectory = args[2];
-  
+  // args[2] (documentDirectory) is kept for arg-count compatibility; unused.
+
   WalletEntry& entry = findWalletOrThrow(walletId);
   Monero::Wallet* wallet = entry.wallet;
-  
-  std::string signedTxBlob;
-  if (!epee::string_tools::parse_hexstr_to_binbuff(signedTxHex, signedTxBlob)) {
-    throw std::runtime_error("Invalid hex string");
+
+  auto it = g_retainedTxs.find(signedTxHex);
+  if (it == g_retainedTxs.end()) {
+    throw std::runtime_error("No pending transaction to broadcast; it may have expired. Please recreate the transaction.");
   }
-  
-  std::string tempFile = documentDirectory + "/tx_broadcast_" + std::to_string(++gTxFileCounter) + ".signed";
-  std::ofstream file(tempFile, std::ios::binary);
-  if (!file.is_open()) {
-    throw std::runtime_error("Failed to create temp file for broadcast");
-  }
-  file.write(signedTxBlob.data(), signedTxBlob.size());
-  file.close();
-  
-  bool success = wallet->submitTransaction(tempFile);
-  
-  std::remove(tempFile.c_str());
-  
+
+  Monero::PendingTransaction* ptx = it->second.ptx;
+
+  // Broadcast the already-signed transaction directly. commit("") (empty
+  // filename) commits to the network on both the LWS and full-node backends.
+  // We deliberately do NOT reload the tx from the signed hex via
+  // submitTransaction/load_tx: on the full-node wallet2 backend the saved blob
+  // is an unsigned tx set that load_tx rejects, which is the historical
+  // "Failed to load transaction from file" full-node send failure.
+  bool success = ptx->commit("");
+  std::string error = success ? std::string() : ptx->errorString();
+
+  wallet->disposeTransaction(ptx);
+  g_retainedTxs.erase(it);
+
   if (!success) {
-    throw std::runtime_error("Broadcast failed: " + wallet->errorString());
+    throw std::runtime_error("Broadcast failed: " + error);
   }
-  
+
   return "success";
 }
 
