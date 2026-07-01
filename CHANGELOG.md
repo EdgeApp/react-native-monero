@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fixed: Monero Full Node (monerod) sends no longer fail with "Failed to load transaction from file". `createTransaction` now retains the signed transaction natively and `broadcastTransaction` commits it directly, instead of saving it to a file and reloading it: on the full-node (wallet2) backend `save_tx` writes an unsigned tx set while `submitTransaction`'s `load_tx` requires a signed one, so the file round-trip always failed. Retained transactions are capped at 50 per wallet (oldest disposed first) and cleared when the wallet closes. The JS API is unchanged.
+
 ## 0.2.0 (2026-06-29)
 
 - changed: Switch the package manager from yarn to npm (package-lock.json + `.npmrc` legacy-peer-deps), matching the other Edge currency repos.
