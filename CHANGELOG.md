@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- fixed: LWS wallets sync again. The 0.2.0 https change passed `use_ssl=true` to `wallet->init` for https daemons; wallet2 (monerod) ignores that flag, but lwsf honors it and switches from tolerant `ssl_support_autodetect` to `ssl_support_enabled`, whose certificate verification always fails on iOS/Android (no OpenSSL system CA store in the app sandbox). Every LWS connection was silently dropped at the TLS handshake, so LWS wallets polled forever at height 0 with no transactions or balance. Revert to `use_ssl=false` (TLS still autodetected from the `https://` scheme); the Nym scheme fix is unaffected since it derives https from the port inside NymHttpClient.
 - fixed: Monero Full Node (monerod) sends no longer fail with "Failed to load transaction from file". `createTransaction` now retains the signed transaction natively and `broadcastTransaction` commits it directly, instead of saving it to a file and reloading it: on the full-node (wallet2) backend `save_tx` writes an unsigned tx set while `submitTransaction`'s `load_tx` requires a signed one, so the file round-trip always failed. Retained transactions are capped at 50 per wallet (oldest disposed first) and cleared when the wallet closes. The JS API is unchanged.
 
 ## 0.2.0 (2026-06-29)
