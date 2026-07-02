@@ -199,6 +199,31 @@ export class CppBridge {
   }
 
   /**
+   * Get not-yet-mined transactions with pagination. Same shape as
+   * getAllTransactions, filtered to pending entries. Pending transactions sort
+   * behind all confirmed ones in getAllTransactions, so a cursor-based scan of
+   * confirmed history never reaches them; use this to read the pending set
+   * directly. The set can include entries the backend reports as permanently
+   * failed (isFailed: true); callers decide how to label those.
+   * @param walletId - Unique identifier for the wallet
+   * @param page - Page number (0-indexed)
+   * @param pageSize - Number of transactions per page
+   * @returns Paginated pending transactions with metadata
+   */
+  async getPendingTransactions(
+    walletId: string,
+    page: number,
+    pageSize: number
+  ): Promise<TransactionsPage> {
+    const response = await this.module.callMonero('getPendingTransactions', [
+      walletId,
+      page.toString(),
+      pageSize.toString()
+    ])
+    return JSON.parse(response) as TransactionsPage
+  }
+
+  /**
    * Create a transaction (supports multiple recipients).
    * The transaction is created and signed but not broadcast yet: it is retained
    * natively for a later broadcastTransaction call. At most 50 transactions are
