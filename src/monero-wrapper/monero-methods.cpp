@@ -619,6 +619,36 @@ std::string deleteWallet(const std::vector<std::string> &args) {
   return "ok";
 }
 
+/** Serialize one TransactionInfo to a JSON object (shared by the tx queries). */
+static std::string transactionToJson(Monero::Wallet* wallet, Monero::TransactionInfo* tx) {
+  std::string json = "{\"hash\":\"" + jsonEscape(tx->hash()) + "\",";
+  json += "\"direction\":" + std::to_string(tx->direction()) + ",";
+  json += "\"isPending\":" + std::string(tx->isPending() ? "true" : "false") + ",";
+  json += "\"isFailed\":" + std::string(tx->isFailed() ? "true" : "false") + ",";
+  json += "\"isCoinbase\":" + std::string(tx->isCoinbase() ? "true" : "false") + ",";
+  json += "\"amount\":\"" + std::to_string(tx->amount()) + "\",";
+  json += "\"fee\":\"" + std::to_string(tx->fee()) + "\",";
+  json += "\"blockHeight\":" + std::to_string(tx->blockHeight()) + ",";
+  json += "\"confirmations\":" + std::to_string(tx->confirmations()) + ",";
+  json += "\"timestamp\":" + std::to_string(tx->timestamp()) + ",";
+  json += "\"paymentId\":\"" + jsonEscape(tx->paymentId()) + "\",";
+  json += "\"description\":\"" + jsonEscape(tx->description()) + "\",";
+  json += "\"label\":\"" + jsonEscape(tx->label()) + "\",";
+  json += "\"unlockTime\":" + std::to_string(tx->unlockTime()) + ",";
+  json += "\"subaddrAccount\":" + std::to_string(tx->subaddrAccount());
+
+  try {
+    std::string txKey = wallet->getTxKey(tx->hash());
+    if (!txKey.empty()) {
+      json += ",\"txKey\":\"" + jsonEscape(txKey) + "\"";
+    }
+  } catch (...) {
+  }
+
+  json += "}";
+  return json;
+}
+
 /**
  * Get all transactions with pagination.
  * Args: walletId, page (0-indexed), pageSize, sort ("asc" or "desc")
@@ -648,36 +678,51 @@ std::string getAllTransactions(const std::vector<std::string> &args) {
   std::string json = "{\"transactions\":[";
   for (int i = startIndex; i < endIndex; i++) {
     if (i > startIndex) json += ",";
-    Monero::TransactionInfo* tx = txs[i];
-    json += "{\"hash\":\"" + jsonEscape(tx->hash()) + "\",";
-    json += "\"direction\":" + std::to_string(tx->direction()) + ",";
-    json += "\"isPending\":" + std::string(tx->isPending() ? "true" : "false") + ",";
-    json += "\"isFailed\":" + std::string(tx->isFailed() ? "true" : "false") + ",";
-    json += "\"isCoinbase\":" + std::string(tx->isCoinbase() ? "true" : "false") + ",";
-    json += "\"amount\":\"" + std::to_string(tx->amount()) + "\",";
-    json += "\"fee\":\"" + std::to_string(tx->fee()) + "\",";
-    json += "\"blockHeight\":" + std::to_string(tx->blockHeight()) + ",";
-    json += "\"confirmations\":" + std::to_string(tx->confirmations()) + ",";
-    json += "\"timestamp\":" + std::to_string(tx->timestamp()) + ",";
-    json += "\"paymentId\":\"" + jsonEscape(tx->paymentId()) + "\",";
-    json += "\"description\":\"" + jsonEscape(tx->description()) + "\",";
-    json += "\"label\":\"" + jsonEscape(tx->label()) + "\",";
-    json += "\"unlockTime\":" + std::to_string(tx->unlockTime()) + ",";
-    json += "\"subaddrAccount\":" + std::to_string(tx->subaddrAccount());
-    
-    try {
-      std::string txKey = wallet->getTxKey(tx->hash());
-      if (!txKey.empty()) {
-        json += ",\"txKey\":\"" + jsonEscape(txKey) + "\"";
-      }
-    } catch (...) {
-    }
-    
-    json += "}";
+    json += transactionToJson(wallet, txs[i]);
   }
   json += "],\"totalCount\":" + std::to_string(totalCount) + ",";
   json += "\"page\":" + std::to_string(page) + ",\"pageSize\":" + std::to_string(pageSize) + "}";
-  
+
+  return json;
+}
+
+/**
+ * Get pending (not yet mined) transactions with pagination. Same transaction
+ * shape as getAllTransactions, filtered to isPending(), in history order.
+ * Pending entries sort behind every confirmed transaction in getAllTransactions,
+ * so a cursor-based scan over confirmed history never reaches them; this gives
+ * the engine a direct view of the (small) pending set instead.
+ * Args: walletId, page (0-indexed), pageSize
+ * Returns: JSON with transactions array, totalCount, page, pageSize
+ */
+std::string getPendingTransactions(const std::vector<std::string> &args) {
+  std::string walletId = args[0];
+  int page = std::stoi(args[1]);
+  int pageSize = std::stoi(args[2]);
+
+  Monero::Wallet* wallet = findWalletOrThrow(walletId).wallet;
+
+  Monero::TransactionHistory* history = wallet->history();
+  history->refresh();
+  std::vector<Monero::TransactionInfo*> all = history->getAll();
+
+  std::vector<Monero::TransactionInfo*> txs;
+  for (Monero::TransactionInfo* tx : all) {
+    if (tx->isPending()) txs.push_back(tx);
+  }
+
+  int totalCount = static_cast<int>(txs.size());
+  int startIndex = page * pageSize;
+  int endIndex = std::min(startIndex + pageSize, totalCount);
+
+  std::string json = "{\"transactions\":[";
+  for (int i = startIndex; i < endIndex; i++) {
+    if (i > startIndex) json += ",";
+    json += transactionToJson(wallet, txs[i]);
+  }
+  json += "],\"totalCount\":" + std::to_string(totalCount) + ",";
+  json += "\"page\":" + std::to_string(page) + ",\"pageSize\":" + std::to_string(pageSize) + "}";
+
   return json;
 }
 
@@ -990,6 +1035,7 @@ const MoneroMethod moneroMethods[] = {
   { "openWallet", 8, openWallet },
   { "getWalletStatus", 1, getWalletStatus },
   { "getAllTransactions", 4, getAllTransactions },
+  { "getPendingTransactions", 3, getPendingTransactions },
   { "closeWallet", 1, closeWallet },
   { "deleteWallet", 3, deleteWallet },
   { "createTransaction", 5, createTransaction },
