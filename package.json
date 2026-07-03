@@ -1,6 +1,6 @@
 {
   "name": "react-native-monero",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "React Native bindings for the monero-lwsf library",
   "homepage": "https://github.com/EdgeApp/react-native-monero",
   "repository": {
