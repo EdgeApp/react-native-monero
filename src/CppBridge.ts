@@ -199,8 +199,38 @@ export class CppBridge {
   }
 
   /**
+   * Get not-yet-mined transactions with pagination. Same shape as
+   * getAllTransactions, filtered to pending entries. Pending transactions sort
+   * behind all confirmed ones in getAllTransactions, so a cursor-based scan of
+   * confirmed history never reaches them; use this to read the pending set
+   * directly. The set can include entries the backend reports as permanently
+   * failed (isFailed: true); callers decide how to label those.
+   * @param walletId - Unique identifier for the wallet
+   * @param page - Page number (0-indexed)
+   * @param pageSize - Number of transactions per page
+   * @returns Paginated pending transactions with metadata
+   */
+  async getPendingTransactions(
+    walletId: string,
+    page: number,
+    pageSize: number
+  ): Promise<TransactionsPage> {
+    const response = await this.module.callMonero('getPendingTransactions', [
+      walletId,
+      page.toString(),
+      pageSize.toString()
+    ])
+    return JSON.parse(response) as TransactionsPage
+  }
+
+  /**
    * Create a transaction (supports multiple recipients).
-   * The transaction is created and signed but not broadcast yet.
+   * The transaction is created and signed but not broadcast yet: it is retained
+   * natively for a later broadcastTransaction call. At most 50 transactions are
+   * retained per wallet (oldest disposed first; broadcasting an evicted one
+   * reports that it must be recreated), and all are released when the wallet
+   * closes. Payments the wallet would split into multiple on-chain
+   * transactions are rejected, so a later broadcast is atomic.
    * @param walletId - Unique identifier for the wallet
    * @param recipients - Array of recipients with addresses and amounts (atomic units)
    * @param priority - Transaction priority (0=Default, 1=Low, 2=Medium, 3=High)
@@ -225,11 +255,13 @@ export class CppBridge {
   }
 
   /**
-   * Broadcast a previously created transaction.
+   * Broadcast a previously created transaction. `signedTx` identifies the
+   * natively retained transaction to broadcast.
    * @param walletId - Unique identifier for the wallet
-   * @param signedTx - The signed transaction string from createTransaction
-   * @returns The transaction hash
-   * @throws Error if broadcast fails
+   * @param signedTx - The signedTxHex returned by createTransaction
+   * @returns "success"
+   * @throws Error if the transaction is no longer retained (evicted, or the
+   *   wallet was closed since creation) or the broadcast fails
    */
   async broadcastTransaction(
     walletId: string,

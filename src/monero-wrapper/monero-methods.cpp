@@ -7,7 +7,8 @@
 #include <algorithm>
 #include <vector>
 #include <sstream>
-#include <fstream>
+#include <limits>
+#include <ctime>
 #include "monero-methods.hpp"
 #include "nym-fetch.hpp"
 #include "wallet/api/wallet2_api.h"
@@ -24,9 +25,6 @@
 namespace lwsf { namespace config {
   void set_api_key(const std::string& k);
 }}
-
-/** Counter for unique temp file names. */
-static uint64_t gTxFileCounter = 0;
 
 /** Escapes a string for safe embedding in JSON (defined below). */
 static std::string jsonEscape(const std::string& s);
@@ -178,6 +176,80 @@ struct WalletEntry {
  * g_wallets from any other thread without adding synchronization.
  */
 static std::map<std::string, WalletEntry> g_wallets;
+
+/** A signed-but-not-yet-broadcast transaction and the wallet that owns it. */
+struct RetainedTx {
+  std::string walletId;
+  Monero::PendingTransaction* ptx;
+  uint64_t seq; // Insertion order, for FIFO eviction.
+};
+
+/**
+ * Signed transactions awaiting broadcast, keyed by the signedTx hex returned to
+ * JS from createTransaction.
+ *
+ * Edge signs a transaction in createTransaction and broadcasts it later in a
+ * separate broadcastTransaction call (after the user confirms). We retain the
+ * fully-signed PendingTransaction here and broadcast it directly, instead of
+ * serializing it to a file and reloading it in broadcastTransaction. The file
+ * round-trip is fundamentally broken on the full-node (wallet2) backend: its
+ * save_tx writes an *unsigned* tx set while submitTransaction's load_tx expects
+ * a *signed* one, so the magic prefixes never match and every full-node send
+ * fails with "Failed to load transaction from file". Broadcasting the retained
+ * PendingTransaction with commit("") works on both the LWS and full-node
+ * backends. Every createTransaction retains, including fee-estimation calls
+ * (getMaxSpendable) that never broadcast. Entries are disposed on broadcast,
+ * when the owning wallet is closed/deleted, or oldest-first once a wallet
+ * reaches MAX_RETAINED_TXS_PER_WALLET.
+ *
+ * Thread-safety: same serial-bridge-queue guarantee as g_wallets.
+ */
+static std::map<std::string, RetainedTx> g_retainedTxs;
+
+/** Monotonic counter stamping g_retainedTxs insertion order. */
+static uint64_t g_retainedTxSeq = 0;
+
+/**
+ * Cap on retained transactions per wallet. Several can be legitimately live at
+ * once (swap quoting fans out one makeSpend per partner before the user picks a
+ * quote), and abandoned ones (expired quotes, cancelled sends, fee
+ * estimations) linger until the wallet closes, so a long session with quote
+ * refreshes could otherwise grow without bound. Beyond the cap the oldest
+ * entry is disposed first; a caller broadcasting an evicted tx gets the
+ * explicit "recreate" error.
+ */
+static const size_t MAX_RETAINED_TXS_PER_WALLET = 50;
+
+/** Retain a signed tx for later broadcast, evicting oldest-first at the cap. */
+static void retainTx(const std::string& walletId, Monero::Wallet* wallet,
+                     const std::string& signedTxHex, Monero::PendingTransaction* ptx) {
+  size_t count = 0;
+  auto oldest = g_retainedTxs.end();
+  for (auto it = g_retainedTxs.begin(); it != g_retainedTxs.end(); ++it) {
+    if (it->second.walletId != walletId) continue;
+    ++count;
+    if (oldest == g_retainedTxs.end() || it->second.seq < oldest->second.seq) {
+      oldest = it;
+    }
+  }
+  if (count >= MAX_RETAINED_TXS_PER_WALLET) {
+    wallet->disposeTransaction(oldest->second.ptx);
+    g_retainedTxs.erase(oldest);
+  }
+  g_retainedTxs[signedTxHex] = RetainedTx{ walletId, ptx, ++g_retainedTxSeq };
+}
+
+/** Dispose and forget any retained transactions owned by the given wallet. */
+static void disposeRetainedTxs(const std::string& walletId, Monero::Wallet* wallet) {
+  for (auto it = g_retainedTxs.begin(); it != g_retainedTxs.end();) {
+    if (it->second.walletId == walletId) {
+      wallet->disposeTransaction(it->second.ptx);
+      it = g_retainedTxs.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 /** Helper to get wallet manager based on backend type. */
 static Monero::WalletManager* getWalletManager(const std::string& backend) {
@@ -415,14 +487,19 @@ std::string openWallet(const std::vector<std::string> &args) {
   }
   
   bool isLws = (backend == "lws");
-  // Derive SSL from the daemon address scheme. Passing use_ssl=false for an
-  // https daemon works on the direct epee client (it autodetects the scheme
-  // from the address) but breaks the Nym path: the NymHttpClient rebuilds the
-  // request URL from this flag and would emit http:// on port 443, so every
-  // monerod RPC fails under Nym. Honor the scheme here so it is correct on
-  // both paths and per-wallet.
-  bool useSsl = daemonAddress.rfind("https://", 0) == 0;
-  wallet->init(daemonAddress, 0, "", "", useSsl, isLws, "");
+  // Always pass use_ssl=false here; the backends derive TLS from the address
+  // scheme instead. wallet2 drops this flag entirely (WalletImpl::doInit calls
+  // wallet2::init without it, which defaults to ssl_support_autodetect), so it
+  // never affected monerod. lwsf DOES honor it: true selects
+  // ssl_support_enabled, whose certificate verification hard-fails on iOS and
+  // Android (no OpenSSL system CA store in the app sandbox), silently dropping
+  // every LWS connection at the TLS handshake, so LWS wallets polled forever
+  // with networkHeight 0 (regression shipped in 0.2.0). false keeps lwsf on
+  // ssl_support_autodetect: TLS is still used for https:// addresses, with
+  // tolerant verification, the long-standing epee behavior. The Nym path is
+  // unaffected either way: NymHttpClient derives its scheme from
+  // m_use_https || port 443, and lwsf-over-Nym bypasses epee TLS entirely.
+  wallet->init(daemonAddress, 0, "", "", false, isLws, "");
 
   auto listener = std::make_unique<WalletListeners>(wallet, walletId);
   wallet->setListener(listener.get());
@@ -503,8 +580,9 @@ std::string closeWallet(const std::vector<std::string> &args) {
 
   entry.wallet->setListener(nullptr);
 
+  disposeRetainedTxs(walletId, entry.wallet);
   manager->closeWallet(entry.wallet);
-  
+
   g_wallets.erase(walletId);
   
   return "ok";
@@ -525,6 +603,7 @@ std::string deleteWallet(const std::vector<std::string> &args) {
     WalletEntry& entry = it->second;
     Monero::WalletManager* manager = getWalletManager(entry.backend);
     entry.wallet->setListener(nullptr);
+    disposeRetainedTxs(walletId, entry.wallet);
     manager->closeWallet(entry.wallet);
     g_wallets.erase(it);
   }
@@ -536,6 +615,80 @@ std::string deleteWallet(const std::vector<std::string> &args) {
   std::remove((path + ".address.txt").c_str());
 
   return "ok";
+}
+
+/** Serialize one TransactionInfo to a JSON object (shared by the tx queries). */
+static std::string transactionToJson(Monero::Wallet* wallet, Monero::TransactionInfo* tx) {
+  // lwsf reports an unmined block height as uint64 max and an unknown
+  // timestamp as time_t max/min. Those sentinels do not survive JSON number
+  // parsing in JS (doubles lose integer precision past 2^53), so emit 0
+  // instead; isPending/isFailed carry the state.
+  uint64_t blockHeight = tx->blockHeight();
+  if (blockHeight == std::numeric_limits<uint64_t>::max()) blockHeight = 0;
+  std::time_t timestamp = tx->timestamp();
+  if (timestamp == std::numeric_limits<std::time_t>::max() ||
+      timestamp == std::numeric_limits<std::time_t>::min()) {
+    timestamp = 0;
+  }
+
+  std::string json = "{\"hash\":\"" + jsonEscape(tx->hash()) + "\",";
+  json += "\"direction\":" + std::to_string(tx->direction()) + ",";
+  json += "\"isPending\":" + std::string(tx->isPending() ? "true" : "false") + ",";
+  json += "\"isFailed\":" + std::string(tx->isFailed() ? "true" : "false") + ",";
+  json += "\"isCoinbase\":" + std::string(tx->isCoinbase() ? "true" : "false") + ",";
+  json += "\"amount\":\"" + std::to_string(tx->amount()) + "\",";
+  json += "\"fee\":\"" + std::to_string(tx->fee()) + "\",";
+  json += "\"blockHeight\":" + std::to_string(blockHeight) + ",";
+  json += "\"confirmations\":" + std::to_string(tx->confirmations()) + ",";
+  json += "\"timestamp\":" + std::to_string(timestamp) + ",";
+  json += "\"paymentId\":\"" + jsonEscape(tx->paymentId()) + "\",";
+  json += "\"description\":\"" + jsonEscape(tx->description()) + "\",";
+  json += "\"label\":\"" + jsonEscape(tx->label()) + "\",";
+  json += "\"unlockTime\":" + std::to_string(tx->unlockTime()) + ",";
+  json += "\"subaddrAccount\":" + std::to_string(tx->subaddrAccount());
+
+  try {
+    std::string txKey = wallet->getTxKey(tx->hash());
+    if (!txKey.empty()) {
+      json += ",\"txKey\":\"" + jsonEscape(txKey) + "\"";
+    }
+  } catch (...) {
+  }
+
+  json += "}";
+  return json;
+}
+
+/**
+ * Serialize one page of a transaction list to the paged JSON envelope shared
+ * by the tx queries. Clamps the page window into [0, txs.size()]: JS-supplied
+ * page/pageSize are not validated by the dispatchers, and a negative page
+ * would otherwise index out of bounds (a native crash, not a catchable
+ * rejection). The math is done in 64-bit so a huge page * pageSize cannot
+ * overflow int.
+ */
+static std::string transactionsPageJson(
+  Monero::Wallet* wallet,
+  const std::vector<Monero::TransactionInfo*>& txs,
+  int page,
+  int pageSize
+) {
+  const long long total = static_cast<long long>(txs.size());
+  long long start = static_cast<long long>(page) * pageSize;
+  if (start < 0) start = 0;
+  if (start > total) start = total;
+  long long end = pageSize > 0 ? start + pageSize : start;
+  if (end > total) end = total;
+
+  std::string json = "{\"transactions\":[";
+  for (long long i = start; i < end; i++) {
+    if (i > start) json += ",";
+    json += transactionToJson(wallet, txs[static_cast<size_t>(i)]);
+  }
+  json += "],\"totalCount\":" + std::to_string(total) + ",";
+  json += "\"page\":" + std::to_string(page) + ",\"pageSize\":" + std::to_string(pageSize) + "}";
+
+  return json;
 }
 
 /**
@@ -559,45 +712,39 @@ std::string getAllTransactions(const std::vector<std::string> &args) {
     if (a->isPending() != b->isPending()) return !a->isPending();
     return ascending ? a->blockHeight() < b->blockHeight() : a->blockHeight() > b->blockHeight();
   });
-  
-  int totalCount = static_cast<int>(txs.size());
-  int startIndex = page * pageSize;
-  int endIndex = std::min(startIndex + pageSize, totalCount);
-  
-  std::string json = "{\"transactions\":[";
-  for (int i = startIndex; i < endIndex; i++) {
-    if (i > startIndex) json += ",";
-    Monero::TransactionInfo* tx = txs[i];
-    json += "{\"hash\":\"" + jsonEscape(tx->hash()) + "\",";
-    json += "\"direction\":" + std::to_string(tx->direction()) + ",";
-    json += "\"isPending\":" + std::string(tx->isPending() ? "true" : "false") + ",";
-    json += "\"isFailed\":" + std::string(tx->isFailed() ? "true" : "false") + ",";
-    json += "\"isCoinbase\":" + std::string(tx->isCoinbase() ? "true" : "false") + ",";
-    json += "\"amount\":\"" + std::to_string(tx->amount()) + "\",";
-    json += "\"fee\":\"" + std::to_string(tx->fee()) + "\",";
-    json += "\"blockHeight\":" + std::to_string(tx->blockHeight()) + ",";
-    json += "\"confirmations\":" + std::to_string(tx->confirmations()) + ",";
-    json += "\"timestamp\":" + std::to_string(tx->timestamp()) + ",";
-    json += "\"paymentId\":\"" + jsonEscape(tx->paymentId()) + "\",";
-    json += "\"description\":\"" + jsonEscape(tx->description()) + "\",";
-    json += "\"label\":\"" + jsonEscape(tx->label()) + "\",";
-    json += "\"unlockTime\":" + std::to_string(tx->unlockTime()) + ",";
-    json += "\"subaddrAccount\":" + std::to_string(tx->subaddrAccount());
-    
-    try {
-      std::string txKey = wallet->getTxKey(tx->hash());
-      if (!txKey.empty()) {
-        json += ",\"txKey\":\"" + jsonEscape(txKey) + "\"";
-      }
-    } catch (...) {
-    }
-    
-    json += "}";
+
+  return transactionsPageJson(wallet, txs, page, pageSize);
+}
+
+/**
+ * Get not-yet-mined transactions with pagination. Same transaction shape as
+ * getAllTransactions, filtered to isPending(), in history order. Pending
+ * entries sort behind every confirmed transaction in getAllTransactions, so a
+ * cursor-based scan over confirmed history never reaches them; this gives the
+ * engine a direct view of the (small) pending set instead. Note the set can
+ * include entries the backend reports as permanently failed (wallet2 keeps
+ * failed sends flagged pending+failed); callers use isFailed to tell them
+ * apart.
+ * Args: walletId, page (0-indexed), pageSize
+ * Returns: JSON with transactions array, totalCount, page, pageSize
+ */
+std::string getPendingTransactions(const std::vector<std::string> &args) {
+  std::string walletId = args[0];
+  int page = std::stoi(args[1]);
+  int pageSize = std::stoi(args[2]);
+
+  Monero::Wallet* wallet = findWalletOrThrow(walletId).wallet;
+
+  Monero::TransactionHistory* history = wallet->history();
+  history->refresh();
+  std::vector<Monero::TransactionInfo*> all = history->getAll();
+
+  std::vector<Monero::TransactionInfo*> txs;
+  for (Monero::TransactionInfo* tx : all) {
+    if (tx->isPending()) txs.push_back(tx);
   }
-  json += "],\"totalCount\":" + std::to_string(totalCount) + ",";
-  json += "\"page\":" + std::to_string(page) + ",\"pageSize\":" + std::to_string(pageSize) + "}";
-  
-  return json;
+
+  return transactionsPageJson(wallet, txs, page, pageSize);
 }
 
 /** Helper to split a comma-separated string. */
@@ -613,7 +760,7 @@ static std::vector<std::string> splitString(const std::string& str, char delimit
 
 /**
  * Create a transaction (multi-recipient supported).
- * Args: walletId, addresses (comma-separated), amounts (comma-separated), priority, documentDirectory
+ * Args: walletId, addresses (comma-separated), amounts (comma-separated), priority, documentDirectory (unused)
  * Returns: JSON with txid, signedTxHex, and fee
  */
 std::string createTransaction(const std::vector<std::string> &args) {
@@ -621,8 +768,8 @@ std::string createTransaction(const std::vector<std::string> &args) {
   std::string addressesStr = args[1];
   std::string amountsStr = args[2];
   int priority = std::stoi(args[3]);
-  std::string documentDirectory = args[4];
-  
+  // args[4] (documentDirectory) is kept for arg-count compatibility; unused.
+
   WalletEntry& entry = findWalletOrThrow(walletId);
   Monero::Wallet* wallet = entry.wallet;
   
@@ -668,67 +815,93 @@ std::string createTransaction(const std::vector<std::string> &args) {
   }
   
   std::vector<std::string> txIds = ptx->txid();
-  std::string txHash = txIds.empty() ? "" : txIds[0];
-  uint64_t fee = ptx->fee();
-  
-  std::string tempFile = documentDirectory + "/tx_" + std::to_string(++gTxFileCounter) + ".signed";
-  
-  if (!ptx->commit(tempFile, true)) {
-    std::string error = ptx->errorString();
+
+  // Reject payments the wallet split into multiple on-chain transactions.
+  // commit("") broadcasts a multi-tx set sequentially with no rollback: a
+  // mid-sequence failure would leave part of the funds moved on-chain while
+  // this method reports total failure, and disposing the object would destroy
+  // the still-unsent remainder. Requiring exactly one tx keeps
+  // broadcastTransaction atomic (it either fully broadcast or it is safe to
+  // recreate).
+  if (txIds.size() != 1) {
+    std::string count = std::to_string(txIds.size());
     wallet->disposeTransaction(ptx);
-    throw std::runtime_error("Failed to save transaction: " + error);
+    throw std::runtime_error(
+      "Transaction would split into " + count +
+      " transactions; send a smaller amount");
   }
-  
-  wallet->disposeTransaction(ptx);
-  
-  std::ifstream file(tempFile, std::ios::binary);
-  if (!file.is_open()) {
-    throw std::runtime_error("Failed to read signed transaction file");
-  }
-  std::string fileContents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-  file.close();
-  
-  std::remove(tempFile.c_str());
-  
-  std::string signedTxHex = epee::string_tools::buff_to_hex_nodelimer(fileContents);
-  
-  return "{\"txid\":\"" + txHash + "\",\"signedTxHex\":\"" + signedTxHex + "\",\"fee\":\"" + std::to_string(fee) + "\"}";
+  std::string txHash = txIds[0];
+  uint64_t fee = ptx->fee();
+
+  // The txid doubles as the `signedTxHex` token returned to JS: it only
+  // identifies the retained PendingTransaction in g_retainedTxs, and the
+  // signed bytes never leave the native side (reloading serialized bytes to
+  // broadcast is exactly the broken full-node path this design avoids), so
+  // there is no reason to serialize, hex-encode, and ship them across the
+  // bridge just to mint a lookup key.
+  //
+  // Keep the fully-signed transaction alive until broadcastTransaction.
+  // Callers that never broadcast (fee estimation) leave the entry to FIFO
+  // eviction or the wallet-close sweep.
+  retainTx(walletId, wallet, txHash, ptx);
+
+  return "{\"txid\":\"" + txHash + "\",\"signedTxHex\":\"" + txHash + "\",\"fee\":\"" + std::to_string(fee) + "\"}";
 }
 
 /**
- * Broadcast a previously created transaction.
- * Args: walletId, signedTxHex (hex string from createTransaction), documentDirectory
- * Returns: "success" on success (txid is obtained from createTransaction result)
+ * Broadcast a previously created transaction. Broadcasts the retained
+ * PendingTransaction that createTransaction kept alive, looked up by the
+ * signedTxHex token; the signed bytes are never reloaded from the token.
+ * Args: walletId, signedTxHex (from createTransaction), documentDirectory (unused)
+ * Returns: "success"
  */
 std::string broadcastTransaction(const std::vector<std::string> &args) {
   std::string walletId = args[0];
   std::string signedTxHex = args[1];
-  std::string documentDirectory = args[2];
-  
+  // args[2] (documentDirectory) is kept for arg-count compatibility; unused.
+
   WalletEntry& entry = findWalletOrThrow(walletId);
   Monero::Wallet* wallet = entry.wallet;
-  
-  std::string signedTxBlob;
-  if (!epee::string_tools::parse_hexstr_to_binbuff(signedTxHex, signedTxBlob)) {
-    throw std::runtime_error("Invalid hex string");
+
+  auto it = g_retainedTxs.find(signedTxHex);
+  if (it == g_retainedTxs.end()) {
+    throw std::runtime_error("No pending transaction to broadcast; it may have expired. Please recreate the transaction.");
   }
-  
-  std::string tempFile = documentDirectory + "/tx_broadcast_" + std::to_string(++gTxFileCounter) + ".signed";
-  std::ofstream file(tempFile, std::ios::binary);
-  if (!file.is_open()) {
-    throw std::runtime_error("Failed to create temp file for broadcast");
+  // The retained transaction spends from the wallet that created it; a
+  // mismatched walletId is a caller bookkeeping bug. Refuse rather than
+  // silently spending from the other wallet.
+  if (it->second.walletId != walletId) {
+    throw std::runtime_error("The pending transaction belongs to a different wallet");
   }
-  file.write(signedTxBlob.data(), signedTxBlob.size());
-  file.close();
-  
-  bool success = wallet->submitTransaction(tempFile);
-  
-  std::remove(tempFile.c_str());
-  
+
+  Monero::PendingTransaction* ptx = it->second.ptx;
+
+  // Broadcast the already-signed transaction directly. commit("") (empty
+  // filename) commits to the network on both the LWS and full-node backends.
+  // We deliberately do NOT reload the tx from the signed hex via
+  // submitTransaction/load_tx: on the full-node wallet2 backend the saved blob
+  // is an unsigned tx set that load_tx rejects, which is the historical
+  // "Failed to load transaction from file" full-node send failure.
+  bool success = ptx->commit("");
+  std::string error = success ? std::string() : ptx->errorString();
+
+  // Dispose on failure too. A retry of the same object is not reliable across
+  // backends (lwsf poisons the object's status after a failed send, and
+  // wallet2 never resets it), so the failure is terminal by design. This is
+  // safe because createTransaction guarantees a single on-chain tx: nothing
+  // can be partially broadcast, and a recreated transaction spends the same
+  // inputs, so if the original did reach the network after a timeout the
+  // recreated one is simply rejected as a double spend rather than moving
+  // funds twice.
+  wallet->disposeTransaction(ptx);
+  g_retainedTxs.erase(it);
+
   if (!success) {
-    throw std::runtime_error("Broadcast failed: " + wallet->errorString());
+    throw std::runtime_error(
+      "Broadcast failed: " + error +
+      ". The transaction was discarded; create a new one to retry.");
   }
-  
+
   return "success";
 }
 
@@ -896,6 +1069,7 @@ const MoneroMethod moneroMethods[] = {
   { "openWallet", 8, openWallet },
   { "getWalletStatus", 1, getWalletStatus },
   { "getAllTransactions", 4, getAllTransactions },
+  { "getPendingTransactions", 3, getPendingTransactions },
   { "closeWallet", 1, closeWallet },
   { "deleteWallet", 3, deleteWallet },
   { "createTransaction", 5, createTransaction },

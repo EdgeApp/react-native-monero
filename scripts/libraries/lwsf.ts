@@ -172,8 +172,11 @@ private:
     // every monerod RPC under Nym (sync, fee/output queries, broadcast). The
     // non-Nym epee client keeps the scheme from the daemon address, which is
     // why monerod works with Nym off but not on. Treat the standard HTTPS port
-    // as https; openWallet also seeds use_ssl from the daemon scheme, covering
-    // https daemons on non-standard ports.
+    // as https. Known gap: an https daemon on a non-standard port still gets
+    // http:// URLs under Nym. Nothing upstream seeds m_use_https for wallet2
+    // (WalletImpl::doInit drops the API-level use_ssl flag, and openWallet
+    // deliberately passes use_ssl=false for lwsf's TLS behavior; see the
+    // comment in monero-methods.cpp openWallet).
     const bool use_https = m_use_https || m_port == "443";
     std::string base = (use_https ? "https://" : "http://") + m_host;
     if (!m_port.empty()) base += ":" + m_port;
