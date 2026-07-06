@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fixed: LWS wallets can spend and receive over the Nym mixnet. The lwsf RPC timeout of 5 seconds was too short for a mixnet round-trip, so single-shot spend and receive calls failed; the Nym path now uses a 120-second budget.
+
 ## 0.3.0 (2026-07-03)
 
 - added: `getPendingTransactions`, a paged view of the not-yet-mined transactions. `getAllTransactions` sorts pending entries behind all confirmed ones, so a cursor-based scan of confirmed history never reaches them; this exposes the pending set directly.
