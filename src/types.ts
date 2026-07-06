@@ -33,6 +33,14 @@ export interface WalletStatus {
   networkHeight: number
   balance: string
   unlockedBalance: string
+  /**
+   * True once at least one server refresh has completed for this wallet. LWS
+   * wallets seed syncedHeight == networkHeight from the stored scan height
+   * until their first refresh, so heights alone cannot tell "caught up" from
+   * "has not looked yet"; treat the wallet as synced/spendable only when this
+   * is true.
+   */
+  refreshed: boolean
 }
 
 /** Transaction direction. */
