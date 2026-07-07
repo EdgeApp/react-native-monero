@@ -9,6 +9,7 @@
 #include <sstream>
 #include <limits>
 #include <ctime>
+#include <atomic>
 #include "monero-methods.hpp"
 #include "nym-fetch.hpp"
 #include "wallet/api/wallet2_api.h"
@@ -135,8 +136,16 @@ public:
   }
   
   void updated() override {}
-  
+
   void refreshed() override {
+    // A refresh cycle has completed: the backend has contacted the server and
+    // merged the transaction history AND unspent outputs (for LWS, the refresh
+    // fetches get_address_txs + get_unspent_outs before this fires), so the
+    // wallet now knows its real balance and spendable outputs. Latch this so
+    // getWalletStatus can report a genuine synced/spendable state rather than
+    // the seed value LWS reports before its first refresh.
+    m_hasRefreshed.store(true);
+
     // Called when refresh cycle completes - safe to store here
     try {
       m_wallet->store("");
@@ -146,10 +155,14 @@ public:
     }
   }
 
+  /** True once at least one server refresh has completed for this wallet. */
+  bool hasRefreshed() const { return m_hasRefreshed.load(); }
+
 private:
   Monero::Wallet* m_wallet;
   std::string m_walletId;
   uint64_t m_lastSaveHeight;
+  std::atomic<bool> m_hasRefreshed{false};
 };
 
 /** Wallet tracking structure. */
@@ -459,7 +472,8 @@ std::string openWallet(const std::vector<std::string> &args) {
     json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
     json += "\"networkHeight\":" + std::to_string(networkHeight) + ",";
     json += "\"balance\":\"" + std::to_string(balance) + "\",";
-    json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\"";
+    json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\",";
+    json += "\"refreshed\":false";
     json += "}";
     return json;
   }
@@ -526,9 +540,10 @@ std::string openWallet(const std::vector<std::string> &args) {
   json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
   json += "\"networkHeight\":" + std::to_string(networkHeight) + ",";
   json += "\"balance\":\"" + std::to_string(balance) + "\",";
-  json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\"";
+  json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\",";
+  json += "\"refreshed\":false";
   json += "}";
-  
+
   return json;
 }
 
@@ -558,13 +573,20 @@ std::string getWalletStatus(const std::vector<std::string> &args) {
   entry.cachedBalance = balance;
   entry.cachedUnlockedBalance = unlockedBalance;
 
+  // syncedHeight/networkHeight are seeded equal on an LWS wallet until its
+  // first server refresh, so heights alone cannot distinguish "caught up" from
+  // "has not looked yet". Report whether a real refresh has completed so the
+  // caller only treats the wallet as synced (and spendable) once it has.
+  bool refreshed = entry.listener != nullptr && entry.listener->hasRefreshed();
+
   std::string json = "{";
   json += "\"syncedHeight\":" + std::to_string(syncedHeight) + ",";
   json += "\"networkHeight\":" + std::to_string(networkHeight) + ",";
   json += "\"balance\":\"" + std::to_string(balance) + "\",";
-  json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\"";
+  json += "\"unlockedBalance\":\"" + std::to_string(unlockedBalance) + "\",";
+  json += "\"refreshed\":" + std::string(refreshed ? "true" : "false");
   json += "}";
-  
+
   return json;
 }
 

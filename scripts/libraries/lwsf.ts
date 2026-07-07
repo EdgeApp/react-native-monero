@@ -292,7 +292,10 @@ private:
 
 export const lwsf = defineLib({
   name: 'lwsf',
-  cacheTag: '0',
+  // Bump this whenever the rpc.cpp / config patch below changes, or the build
+  // silently reuses the cached (unpatched) library. The literal tag does not
+  // hash the patch content, so edits here are invisible to the cache otherwise.
+  cacheTag: '1-nym-timeout',
   libDeps: ['boost', 'libsodium', 'libunbound', 'libzmq', 'openssl'],
   deps: ['monero.clone'],
 
@@ -384,13 +387,18 @@ namespace nymfetch {
       if (path.empty() || path.front() != '/') path.insert(path.begin(), '/');
       const std::string url = base + path;
       try {
+        // Nym mixnet round-trips routinely exceed the 5s config::rpc_timeout
+        // used for the direct client below (the mixFetch client itself allows
+        // 300s). A single-shot spend RPC (get_random_outs, submit_raw_tx) has
+        // no retry, so a 5s budget makes LWS sends over Nym fail deterministically
+        // while the retrying sync loop merely limps. Give the Nym path a generous
+        // budget instead.
+        const std::uint64_t nymTimeoutMs = 120000;
         const auto r = nymfetch::performFetch(
           url, "POST",
           std::string("{\\"Content-Type\\":\\"application/json; charset=utf-8\\"}"),
           body_str,
-          static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-              config::rpc_timeout).count()));
+          nymTimeoutMs);
         if (r.status == 200 || r.status == 201) return r.body;
         if (r.status <= 0 || std::numeric_limits<int>::max() < r.status)
           return {error::invalid_code};
