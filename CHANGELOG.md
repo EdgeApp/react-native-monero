@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 (2026-07-06)
+
 - added: `getWalletStatus` reports a `refreshed` flag, true once the wallet has completed its first server refresh (and so knows its real balance and spendable outputs). LWS wallets report seed heights that look synced before then, so treat a wallet as synced only when `refreshed` is true.
 - fixed: LWS wallets can spend and receive over the Nym mixnet. The lwsf RPC timeout of 5 seconds was too short for a mixnet round-trip, so single-shot spend and receive calls failed; the Nym path now uses a 120-second budget.
 
