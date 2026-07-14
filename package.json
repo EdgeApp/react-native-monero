@@ -26,6 +26,8 @@
     "*.{js,ts}": "eslint"
   },
   "scripts": {
+    "clean": "npm run clean:js && rm -rf tmp android/src/main/jniLibs ios/MoneroModule.xcframework",
+    "clean:js": "rm -rf node_modules lib",
     "fix": "npm run lint -- --fix",
     "lint": "eslint .",
     "prepack": "npm run build-native",
