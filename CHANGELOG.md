@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fixed: iOS no longer crashes with EXC_BAD_INSTRUCTION (SIGILL) in `CRYPTO_atomic_load` on A11 and older devices (iPhone X, 8, 7, 6s) the moment a wallet opens. OpenSSL's `ios64-xcrun` build target stopped passing a deployment-target flag, so clang targeted the SDK version and raised the CPU baseline to apple-a12, emitting ARMv8.3 `ldapr` (and ARMv8.1 LSE) instructions those chips lack; the first SSL client construction (`getWalletManager` → `boost::asio::ssl::context` → `ERR_clear_error`) executed one and crash-looped the app on login. The OpenSSL build now pins `-miphoneos-version-min`/`-mios-simulator-version-min` to the platform minimum, restoring the ARMv8.0 baseline (`ldar`).
+
 ## 0.4.0 (2026-07-06)
 
 - added: `getWalletStatus` reports a `refreshed` flag, true once the wallet has completed its first server refresh (and so knows its real balance and spendable outputs). LWS wallets report seed heights that look synced before then, so treat a wallet as synced only when `refreshed` is true.

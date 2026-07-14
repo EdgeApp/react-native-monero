@@ -30,6 +30,19 @@ export const openssl = defineLib({
     //   })
     // }
 
+    if (platform.type === 'ios') {
+      // OpenSSL's ios64-xcrun target stopped passing any deployment-target
+      // flag, so clang defaults to the SDK version and raises the CPU
+      // baseline to apple-a12. That emits ARMv8.3 `ldapr` (and v8.1 LSE)
+      // instructions, which crash with SIGILL on A11 and older devices
+      // (iPhone X, 8, 7, 6s). Configure forwards `-` args to the compiler:
+      extraConfig.push(
+        platform.sdk === 'iphoneos'
+          ? `-miphoneos-version-min=${platform.version}`
+          : `-mios-simulator-version-min=${platform.version}`
+      )
+    }
+
     await build.exec('./Configure', [
       getTarget(platform),
       `--prefix=${prefixPath}`,
