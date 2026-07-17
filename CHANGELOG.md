@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.2 (2026-07-17)
+
+- changed: Bump vtnerd/lwsf to da8e2617958312f10fe4406808c2a951c5cf0a09
+
 ## 0.4.1 (2026-07-14)
 
 - fixed: iOS no longer crashes with EXC_BAD_INSTRUCTION (SIGILL) in `CRYPTO_atomic_load` on A11 and older devices (iPhone X, 8, 7, 6s) the moment a wallet opens. OpenSSL's `ios64-xcrun` build target stopped passing a deployment-target flag, so clang targeted the SDK version and raised the CPU baseline to apple-a12, emitting ARMv8.3 `ldapr` (and ARMv8.1 LSE) instructions those chips lack; the first SSL client construction (`getWalletManager` → `boost::asio::ssl::context` → `ERR_clear_error`) executed one and crash-looped the app on login. The OpenSSL build now pins `-miphoneos-version-min`/`-mios-simulator-version-min` to the platform minimum, restoring the ARMv8.0 baseline (`ldar`).
