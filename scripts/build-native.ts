@@ -103,6 +103,9 @@ const ffi = defineLib({
       await build.exec(useCxx ? platform.tools.CXX : platform.tools.CC, [
         '-c',
         ...(useCxx ? ['-std=c++17'] : []),
+        '-Oz',
+        '-ffunction-sections',
+        '-fdata-sections',
         ...sdkFlags.split(' '),
         ...includePaths.map(path => `-I${path}`),
         `-o${object}`,
@@ -160,7 +163,23 @@ const ffi = defineLib({
         '-llog',
         `-Wl,--version-script=${join(srcPath, 'jni/exports.map')}`,
         '-Wl,--no-undefined',
-        '-Wl,-z,max-page-size=16384'
+        '-Wl,-z,max-page-size=16384',
+
+        // The version script above exports only 4 JNI symbols, so let the
+        // linker discard everything unreachable from those (the statically
+        // linked deps include daemon, consensus, and mining code we never
+        // call). Requires -ffunction-sections in each library's build:
+        '-Wl,--gc-sections',
+        // Fold duplicate identical functions (mostly template instances):
+        '-Wl,--icf=safe',
+        // Pack relative relocations (APS2 format, supported since API 23).
+        // Saves over 1 MiB of .rela.dyn on arm64:
+        '-Wl,--pack-dyn-relocs=android',
+        // Keep the symbol table for crash symbolication, but drop DWARF.
+        // This is what AGP ships in the APK anyway, and it keeps the npm
+        // package tens of MiB smaller:
+        '-Wl,--build-id=sha1',
+        '-Wl,--strip-debug'
       ])
       build.log('done')
     }
