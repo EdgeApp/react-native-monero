@@ -295,7 +295,10 @@ export const lwsf = defineLib({
   // Bump this whenever the rpc.cpp / config patch below changes, or the build
   // silently reuses the cached (unpatched) library. The literal tag does not
   // hash the patch content, so edits here are invisible to the cache otherwise.
-  cacheTag: '2-da8e261-txcap',
+  cacheTag: '3-da8e261-sizeflags',
+  // Note: nothing zmq ever links into the shipped .so, but monero's
+  // CMakeLists declares libzmq with pkg_check_modules(REQUIRED), so the
+  // build must still exist for lwsf's configure step to pass.
   libDeps: ['boost', 'libsodium', 'libunbound', 'libzmq', 'openssl'],
   deps: ['monero.clone'],
 
@@ -467,8 +470,13 @@ namespace nymfetch {
       `-B${join(build.cwd, 'cmake')}`,
       // Build options:
       `-DCMAKE_BUILD_TYPE=Release`,
-      `-DCMAKE_CXX_FLAGS=-DLWSF_MASTER_ENABLE`,
-      `-DCMAKE_C_FLAGS=-D_DARWIN_C_SOURCE`,
+      `-DCMAKE_CXX_FLAGS=-DLWSF_MASTER_ENABLE -ffunction-sections -fdata-sections`,
+      `-DCMAKE_C_FLAGS=-D_DARWIN_C_SOURCE -ffunction-sections -fdata-sections`,
+      // CMake's default Release level is -O3. -O2 emits noticeably smaller
+      // code, and the final --gc-sections link can only drop dead functions,
+      // not shrink the live ones:
+      `-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG`,
+      `-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG`,
       `-DCMAKE_FIND_ROOT_PATH=${prefixPath};${platform.sysroot}"`,
       `-DCMAKE_INSTALL_PREFIX=${prefixPath}`,
       `-DCMAKE_PREFIX_PATH=${prefixPath}`,

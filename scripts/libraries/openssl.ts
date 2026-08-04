@@ -3,9 +3,52 @@ import { dirname } from 'path'
 import { defineLib } from '../utils/lib'
 import type { Platform } from '../utils/platforms'
 
+// Features a TLS client wallet never touches, but which the default build
+// links into the shipped binary (QUIC stack, SM2 precompute tables, legacy
+// ciphers, CMS/OCSP/TS PKI tooling). Names validated against 3.6.0's
+// Configure disablables list.
+const sizeConfig = [
+  'no-apps',
+  'no-aria',
+  'no-blake2',
+  'no-camellia',
+  'no-cast',
+  'no-cmp',
+  'no-cms',
+  'no-comp',
+  'no-ct',
+  'no-docs',
+  'no-dso',
+  'no-dtls',
+  'no-ec2m',
+  'no-engine',
+  'no-gost',
+  'no-http',
+  'no-idea',
+  'no-legacy',
+  'no-md4',
+  'no-mdc2',
+  'no-ocsp',
+  'no-psk',
+  'no-quic',
+  'no-rc2',
+  'no-rc4',
+  'no-rc5',
+  'no-rmd160',
+  'no-seed',
+  'no-sm2',
+  'no-sm3',
+  'no-sm4',
+  'no-srp',
+  'no-srtp',
+  'no-tests',
+  'no-ts',
+  'no-whirlpool'
+]
+
 export const openssl = defineLib({
   name: 'openssl',
-  cacheTag: '0',
+  cacheTag: '1',
 
   // 3.6.0
   url: 'https://github.com/openssl/openssl.git',
@@ -48,6 +91,13 @@ export const openssl = defineLib({
       `--prefix=${prefixPath}`,
       'no-async',
       'no-shared',
+      ...sizeConfig,
+      // Configure forwards dash-prefixed args to the compiler. These come
+      // after its own -O3, so -Oz wins. The hot AES/SHA/EC paths use
+      // hand-written asm and are unaffected by the C optimization level:
+      '-Oz',
+      '-ffunction-sections',
+      '-fdata-sections',
       ...extraConfig
     ])
     await build.exec('make', [])

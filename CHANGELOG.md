@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- changed: Cut the Android native payload by roughly a third with dead-code elimination (--gc-sections against the 4-symbol JNI export list, identical-function folding, packed relocations), a trimmed OpenSSL build (36 unused features removed, QUIC and SM2 tables included), and size-tuned optimization levels. APK-stripped librnmonero.so: arm64-v8a 15.2 MiB to 9.5 MiB, armeabi-v7a 12.4 MiB to 8.3 MiB. The npm artifact also drops DWARF at link time (symbol table kept), halving its size.
+
 ## 0.4.2 (2026-07-17)
 
 - changed: Bump vtnerd/lwsf to da8e2617958312f10fe4406808c2a951c5cf0a09
