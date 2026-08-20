@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- added: Node N-API addon (`react-native-monero/node`) that builds the same C++ method table for host darwin/linux via `npm run build-native -- host`. `react-native` is now an optional peer; the package root no longer imports it.
+- changed: `makeMonero()` lives at `react-native-monero/rn` so Node can load types and `CppBridge` without `react-native`.
+
 ## 0.5.0 (2026-08-14)
 
 - changed: (Breaking) `broadcastTransaction` returns a `BroadcastResult` with the transaction secret key (`txKey`) instead of the string `"success"`. The key is the sender's only proof of payment and the broadcast is the send path's only chance to hand it to the caller, since it cannot be derived from the seed. A key the wallet cannot report never fails an already-broadcast payment: the result simply carries no `txKey`.

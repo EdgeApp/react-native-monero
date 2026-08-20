@@ -10,7 +10,7 @@ const moneroHash = '38bc62741b82cca179fb8e3437a388b0e0f67842' // Nov 7, 2025
 
 addTask({
   name: 'monero.clone',
-  cacheTag: moneroHash,
+  cacheTag: `${moneroHash}-no-iops`,
   async run(build) {
     await getRepo(
       'monero',
@@ -54,9 +54,26 @@ addTask({
         .replace(
           '#include <IOKit/ps/IOPowerSources.h>',
           '// $& # Disabled by react-native build'
+        )
+        .replace(
+          `#elif defined(__APPLE__) 
+      
+      #if TARGET_OS_MAC && (!defined(MAC_OS_X_VERSION_MIN_REQUIRED) || MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7)
+        return boost::logic::tribool(IOPSGetTimeRemainingEstimate() != kIOPSTimeRemainingUnlimited);
+      #else
+        // iOS or OSX <10.7
+        return boost::logic::tribool(boost::logic::indeterminate);
+      #endif`,
+          `#elif defined(__APPLE__)
+      // Host/iOS: IOKit power APIs are not linked into the wallet addon.
+      return boost::logic::tribool(boost::logic::indeterminate);`
         ),
       'utf8'
     )
+    const minerPatched = await readFile(minerPath, 'utf8')
+    if (minerPatched.includes('IOPSGetTimeRemainingEstimate')) {
+      throw new Error('miner.cpp IOPS patch anchors did not match')
+    }
 
     // Patch monero/src/net/http.cpp so that `client_factory::create()`
     // returns a nym-aware http client when the nym-fetch interceptor is
@@ -295,7 +312,7 @@ export const lwsf = defineLib({
   // Bump this whenever the rpc.cpp / config patch below changes, or the build
   // silently reuses the cached (unpatched) library. The literal tag does not
   // hash the patch content, so edits here are invisible to the cache otherwise.
-  cacheTag: '2-da8e261-txcap',
+  cacheTag: '3-da8e261-txcap-host-nohid',
   libDeps: ['boost', 'libsodium', 'libunbound', 'libzmq', 'openssl'],
   deps: ['monero.clone'],
 
@@ -458,6 +475,9 @@ namespace nymfetch {
     build.exportEnv({
       PKG_CONFIG_PATH: join(prefixPath, '/lib/pkgconfig')
     })
+    if (platform.type === 'host' && platform.os === 'darwin') {
+      build.exportEnv({ SDKROOT: platform.sysroot })
+    }
 
     // Works for Android:
     await build.exec('cmake', [
@@ -469,12 +489,21 @@ namespace nymfetch {
       `-DCMAKE_BUILD_TYPE=Release`,
       `-DCMAKE_CXX_FLAGS=-DLWSF_MASTER_ENABLE`,
       `-DCMAKE_C_FLAGS=-D_DARWIN_C_SOURCE`,
-      `-DCMAKE_FIND_ROOT_PATH=${prefixPath};${platform.sysroot}"`,
+      `-DCMAKE_FIND_ROOT_PATH=${
+        platform.type === 'host'
+          ? prefixPath
+          : `${prefixPath};${platform.sysroot}`
+      }`,
       `-DCMAKE_INSTALL_PREFIX=${prefixPath}`,
       `-DCMAKE_PREFIX_PATH=${prefixPath}`,
       `-DMONERO_SOURCE_DIR=${join(build.basePath, 'monero')}`,
       `-DSTATIC=true`,
       `-DUSE_DEVICE_TREZOR=OFF`,
+      // Host clang finds Homebrew hidapi/readline; we do not want Ledger
+      // hardware or Homebrew dylibs in the Node addon.
+      ...(platform.type === 'host'
+        ? [`-DCMAKE_DISABLE_FIND_PACKAGE_HIDAPI=ON`, `-DUSE_READLINE=OFF`]
+        : []),
       ...platform.cmakeFlags
     ])
     await build.exec('cmake', [

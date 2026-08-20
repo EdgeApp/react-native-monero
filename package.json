@@ -11,6 +11,25 @@
   "author": "Airbitz, Inc.",
   "main": "lib/src/index.js",
   "types": "lib/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/src/index.d.ts",
+      "default": "./lib/src/index.js"
+    },
+    "./rn": {
+      "types": "./lib/src/rn.d.ts",
+      "default": "./lib/src/rn.js"
+    },
+    "./node": {
+      "types": "./lib/src/node.d.ts",
+      "default": "./lib/src/node.js"
+    },
+    "./lib/src/CppBridge": {
+      "types": "./lib/src/CppBridge.d.ts",
+      "default": "./lib/src/CppBridge.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "/android/build.gradle",
     "/android/src/",
@@ -18,9 +37,11 @@
     "/ios/",
     "/lib/src/",
     "/package.json",
+    "/prebuilds/",
     "/react-native-monero.podspec",
     "/README.md",
-    "/src/monero-wrapper/monero-methods.hpp"
+    "/src/monero-wrapper/monero-methods.hpp",
+    "/src/node/"
   ],
   "lint-staged": {
     "*.{js,ts}": "eslint"
@@ -33,7 +54,12 @@
     "prepack": "npm run build-native",
     "prepare": "husky && lint-staged && rimraf lib && tsc",
     "precommit": "npm run lint",
-    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts"
+    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts",
+    "build-native-host": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts host"
+  },
+  "dependencies": {
+    "cleaners": "^0.3.17",
+    "node-addon-api": "^8.5.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
@@ -41,15 +67,18 @@
     "eslint-config-standard-kit": "^1.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.6",
+    "node-gyp": "^11.4.2",
     "prettier": "^3.6.2",
     "rimraf": "^6.1.0",
     "sucrase": "^3.35.0",
     "typescript": "^5.9.3"
   },
-  "dependencies": {
-    "cleaners": "^0.3.17"
-  },
   "peerDependencies": {
     "react-native": ">=0.47.0 <1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-native": {
+      "optional": true
+    }
   }
 }

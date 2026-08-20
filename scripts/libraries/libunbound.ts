@@ -17,7 +17,12 @@ export const libunbound = defineLib({
       ...platform.tools,
       PKG_CONFIG_PATH: join(prefixPath, 'lib/pkgconfig')
     })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type === 'ios' || platform.type === 'host') {
+      build.exportEnv({ ...platform.sdkFlags })
+    }
+    if (platform.type === 'host' && platform.os === 'darwin') {
+      build.exportEnv({ SDKROOT: platform.sysroot })
+    }
 
     await build.exec('./configure', [
       '--enable-static',

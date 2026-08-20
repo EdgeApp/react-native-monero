@@ -2,6 +2,7 @@ import { writeFile } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 
 import { defineLib } from '../utils/lib'
+import { boostTargetOs } from '../utils/platforms'
 
 const version = '1.85.0'
 const underVersion = version.replace(/[.]/g, '_')
@@ -59,7 +60,7 @@ export const boost = defineLib({
 <compileflags>-g
 <compileflags>-Oz
 `
-    if (platform.type === 'ios') {
+    if (platform.type === 'ios' || platform.type === 'host') {
       for (const arg of platform.sdkFlags.CXXFLAGS.split(' '))
         userConfig = userConfig + `<compileflags>${arg}\n`
       for (const arg of platform.sdkFlags.LDFLAGS.split(' '))
@@ -80,7 +81,7 @@ export const boost = defineLib({
       ...boostLibs.map(lib => `--with-${lib}`),
       'install',
       'link=static',
-      `target-os=${platform.type === 'ios' ? 'iphone' : platform.type}`,
+      `target-os=${boostTargetOs(platform)}`,
       'threading=multi',
       `toolset=clang-nat1ve` // The tag needs to include a number
     ])

@@ -43,6 +43,10 @@ export const openssl = defineLib({
       )
     }
 
+    if (platform.type === 'host' && platform.os === 'darwin') {
+      build.exportEnv({ SDKROOT: platform.sysroot })
+    }
+
     await build.exec('./Configure', [
       getTarget(platform),
       `--prefix=${prefixPath}`,
@@ -78,6 +82,15 @@ function getTarget(platform: Platform): string {
           ? 'ios64-xcrun'
           : 'iossimulator-arm64-xcrun'
     }
+  }
+
+  if (platform.type === 'host') {
+    if (platform.os === 'darwin') {
+      return platform.arch === 'arm64'
+        ? 'darwin64-arm64-cc'
+        : 'darwin64-x86_64-cc'
+    }
+    return platform.arch === 'arm64' ? 'linux-aarch64' : 'linux-x86_64'
   }
 
   return ''

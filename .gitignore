@@ -3,6 +3,7 @@
 /ios/MoneroModule.xcframework/
 /lib/
 /node_modules/
+/prebuilds/
 /tmp/
 
 # iOS stuff:

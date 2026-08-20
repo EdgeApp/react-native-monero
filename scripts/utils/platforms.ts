@@ -72,7 +72,20 @@ export interface IosPlatform extends CommonPlatform {
   sdkFlags: ToolFlags
 }
 
-export type Platform = AndroidPlatform | IosPlatform
+export interface HostPlatform extends CommonPlatform {
+  type: 'host'
+  os: 'darwin' | 'linux'
+  sdkFlags: ToolFlags
+}
+
+export type Platform = AndroidPlatform | IosPlatform | HostPlatform
+
+/** Boost b2 `target-os=` value for this platform. */
+export function boostTargetOs(platform: Platform): string {
+  if (platform.type === 'ios') return 'iphone'
+  if (platform.type === 'android') return 'android'
+  return platform.os
+}
 
 export const makePlatforms = async (): Promise<Platform[]> => [
   ...(await makeAndroidPlatforms()),
@@ -216,4 +229,72 @@ export async function makeIosPlatforms(): Promise<IosPlatform[]> {
     })
   }
   return out
+}
+
+/**
+ * Host (Node) toolchain for the current machine.
+ * Does not require ANDROID_HOME or an iOS SDK.
+ */
+export async function makeHostPlatforms(): Promise<HostPlatform[]> {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+    throw new Error(
+      `Host Monero builds are not supported on ${process.platform}`
+    )
+  }
+
+  const os: 'darwin' | 'linux' =
+    process.platform === 'darwin' ? 'darwin' : 'linux'
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+  const gnuArch = arch === 'arm64' ? 'aarch64' : 'x86_64'
+  const triple =
+    os === 'darwin' ? `${gnuArch}-apple-darwin` : `${gnuArch}-linux-gnu`
+
+  const sysroot =
+    os === 'darwin' ? await quietExec('xcrun', ['--show-sdk-path']) : '/'
+
+  const darwinFlags =
+    os === 'darwin' ? `-isysroot ${sysroot} -mmacosx-version-min=11.0` : ''
+  const sdkFlags: ToolFlags = {
+    CFLAGS: darwinFlags,
+    CPPFLAGS: darwinFlags,
+    CXXFLAGS: darwinFlags,
+    LDFLAGS: darwinFlags
+  }
+
+  const findTool = async (name: string): Promise<string> => {
+    if (os === 'darwin') {
+      return await quietExec('xcrun', ['--find', name])
+    }
+    return await quietExec('which', [name])
+  }
+
+  const cmakeFlags =
+    os === 'darwin'
+      ? [
+          `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0`,
+          `-DCMAKE_OSX_ARCHITECTURES=${arch === 'x64' ? 'x86_64' : 'arm64'}`,
+          `-DCMAKE_OSX_SYSROOT=${sysroot}`
+        ]
+      : []
+
+  return [
+    {
+      type: 'host',
+      os,
+      arch,
+      name: `host-${os}-${arch}`,
+      cmakeFlags,
+      sysroot,
+      sdkFlags,
+      tools: {
+        AR: await findTool('ar'),
+        CC: await findTool('clang'),
+        CXX: await findTool('clang++'),
+        LD: await findTool('clang++'),
+        OBJCOPY: 'objcopy',
+        RANLIB: await findTool('ranlib')
+      },
+      triple
+    }
+  ]
 }

@@ -12,7 +12,12 @@ export const libsodium = defineLib({
     build.exportEnv({ ...platform.tools })
 
     build.exportEnv({ ...platform.tools })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type === 'ios' || platform.type === 'host') {
+      build.exportEnv({ ...platform.sdkFlags })
+    }
+    if (platform.type === 'host' && platform.os === 'darwin') {
+      build.exportEnv({ SDKROOT: platform.sysroot })
+    }
 
     await build.exec('./configure', [
       '--enable-static',

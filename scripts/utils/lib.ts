@@ -127,7 +127,17 @@ export function addDownloadTask(name: string, url: string, hash: string): void {
 
       if (!(await fileExists(filePath))) {
         build.log(`Getting ${filename}...`)
-        await build.exec('curl', ['-L', '-o', filePath, url])
+        await build.exec('curl', [
+          '--http1.1',
+          '-L',
+          '--retry',
+          '5',
+          '--retry-delay',
+          '2',
+          '-o',
+          filePath,
+          url
+        ])
       }
 
       return hash

@@ -14,7 +14,12 @@ export const libexpat = defineLib({
     build.cd(join(build.cwd, 'expat'))
 
     build.exportEnv({ ...platform.tools })
-    if (platform.type === 'ios') build.exportEnv({ ...platform.sdkFlags })
+    if (platform.type === 'ios' || platform.type === 'host') {
+      build.exportEnv({ ...platform.sdkFlags })
+    }
+    if (platform.type === 'host' && platform.os === 'darwin') {
+      build.exportEnv({ SDKROOT: platform.sysroot })
+    }
 
     await build.exec('./buildconf.sh')
     await build.exec('./configure', [
