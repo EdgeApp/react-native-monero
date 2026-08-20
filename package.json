@@ -30,14 +30,24 @@
     },
     "./package.json": "./package.json"
   },
+  "typesVersions": {
+    "*": {
+      "node": ["lib/src/node.d.ts"],
+      "rn": ["lib/src/rn.d.ts"]
+    }
+  },
   "files": [
     "/android/build.gradle",
     "/android/src/",
     "/CHANGELOG.md",
     "/ios/",
     "/lib/src/",
+    "/node.d.ts",
+    "/node.js",
     "/package.json",
     "/prebuilds/",
+    "/rn.d.ts",
+    "/rn.js",
     "/react-native-monero.podspec",
     "/README.md",
     "/src/monero-wrapper/monero-methods.hpp",
