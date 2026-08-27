@@ -20,10 +20,6 @@
       "types": "./lib/src/rn.d.ts",
       "default": "./lib/src/rn.js"
     },
-    "./node": {
-      "types": "./lib/src/node.d.ts",
-      "default": "./lib/src/node.js"
-    },
     "./lib/src/CppBridge": {
       "types": "./lib/src/CppBridge.d.ts",
       "default": "./lib/src/CppBridge.js"
@@ -32,7 +28,6 @@
   },
   "typesVersions": {
     "*": {
-      "node": ["lib/src/node.d.ts"],
       "rn": ["lib/src/rn.d.ts"]
     }
   },
@@ -42,16 +37,12 @@
     "/CHANGELOG.md",
     "/ios/",
     "/lib/src/",
-    "/node.d.ts",
-    "/node.js",
     "/package.json",
-    "/prebuilds/",
     "/rn.d.ts",
     "/rn.js",
     "/react-native-monero.podspec",
     "/README.md",
-    "/src/monero-wrapper/monero-methods.hpp",
-    "/src/node/"
+    "/src/monero-wrapper/monero-methods.hpp"
   ],
   "lint-staged": {
     "*.{js,ts}": "eslint"
@@ -64,8 +55,7 @@
     "prepack": "npm run build-native",
     "prepare": "husky && lint-staged && rimraf lib && tsc",
     "precommit": "npm run lint",
-    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts",
-    "build-native-host": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts host"
+    "build-native": "ZERO_AR_DATE=1 node -r sucrase/register ./scripts/build-native.ts"
   },
   "dependencies": {
     "cleaners": "^0.3.17",

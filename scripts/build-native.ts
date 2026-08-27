@@ -18,7 +18,7 @@
 // | OpenSSL    | custom            | custom                |
 //
 
-import { copyFile, mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, rm } from 'fs/promises'
 import { basename, join } from 'path'
 
 import { boost } from './libraries/boost'
@@ -30,11 +30,7 @@ import { lwsf } from './libraries/lwsf'
 import { openssl } from './libraries/openssl'
 import { lsr, tmpPath } from './utils/common'
 import { defineLib } from './utils/lib'
-import {
-  makeHostPlatforms,
-  makeIosPlatforms,
-  makePlatforms
-} from './utils/platforms'
+import { makeIosPlatforms, makePlatforms } from './utils/platforms'
 import { addTask, startBuild } from './utils/tasks'
 
 const ffi = defineLib({
@@ -250,9 +246,7 @@ async function main(): Promise<void> {
   await mkdir(tmpPath, { recursive: true })
 
   const target = process.argv[2] ?? 'default'
-  const hostOnly = target === 'host' || target === 'nodeaddon'
-
-  const platforms = hostOnly ? await makeHostPlatforms() : await makePlatforms()
+  const platforms = await makePlatforms()
 
   boost(platforms)
   ffi(platforms)
@@ -263,68 +257,7 @@ async function main(): Promise<void> {
   lwsf(platforms)
   openssl(platforms)
 
-  if (hostOnly) {
-    const hostName = platforms[0].name
-    addTask({
-      name: 'nodeaddon',
-      cacheTag: undefined,
-      deps: [`ffi.build.${hostName}`],
-      async run(build) {
-        const ffiPath = join(build.basePath, 'build', `ffi-${hostName}`)
-        const staticLib = join(ffiPath, 'monero-module.a')
-        const prebuildDir = join(
-          __dirname,
-          '../prebuilds',
-          `${process.platform}-${process.arch}`
-        )
-        await mkdir(prebuildDir, { recursive: true })
-
-        const napiInclude = String(
-          require(join(__dirname, '../node_modules/node-addon-api')).include
-        ).replace(/"/g, '')
-
-        const gypDir = join(build.basePath, 'nodeaddon')
-        await mkdir(gypDir, { recursive: true })
-        // node-gyp/make cannot compile sources given as absolute paths.
-        const napiSrc = join(__dirname, '../src/node/monero-napi.cpp')
-        await copyFile(napiSrc, join(gypDir, 'monero-napi.cpp'))
-        const gypPath = join(gypDir, 'binding.gyp')
-        const gyp = {
-          targets: [
-            {
-              target_name: 'monero',
-              sources: ['monero-napi.cpp'],
-              include_dirs: [
-                napiInclude,
-                join(__dirname, '../src/monero-wrapper')
-              ],
-              defines: ['NAPI_CPP_EXCEPTIONS'],
-              'cflags!': ['-fno-exceptions'],
-              'cflags_cc!': ['-fno-exceptions'],
-              cflags_cc: ['-std=c++17', '-fPIC'],
-              libraries: [staticLib],
-              xcode_settings: {
-                GCC_ENABLE_CPP_EXCEPTIONS: 'YES',
-                CLANG_CXX_LANGUAGE_STANDARD: 'c++17',
-                MACOSX_DEPLOYMENT_TARGET: '11.0',
-                OTHER_LDFLAGS: ['-lc++', '-lz']
-              }
-            }
-          ]
-        }
-        await writeFile(gypPath, JSON.stringify(gyp, null, 2))
-
-        const nodeGyp = join(__dirname, '../node_modules/.bin/node-gyp')
-        await build.exec(nodeGyp, ['rebuild'], { cwd: gypDir })
-
-        const built = join(gypDir, 'build/Release/monero.node')
-        await build.exec('cp', [built, join(prebuildDir, 'monero.node')])
-        build.log(`Wrote ${join(prebuildDir, 'monero.node')}`)
-      }
-    })
-  }
-
-  await startBuild(hostOnly ? 'nodeaddon' : target, { basePath: tmpPath })
+  await startBuild(target, { basePath: tmpPath })
 }
 
 main().catch((error: unknown) => {
