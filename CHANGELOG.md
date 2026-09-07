@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fixed: Debug iOS builds no longer fail to link with an `arm64_b26` fixup error against `_mdb_mutex_failed` when the app also carries other large native libraries. The vendored LMDB puts about 50 environment functions in a private `__TEXT,text_env` section, and the two-field Mach-O section specifier it used left `S_ATTR_PURE_INSTRUCTIONS` unset, so the linker did not count the section as code: it sorted it past every real code section, 173MB into a 190MB `__TEXT`, and would not plant a branch island for calls that crossed the +/-128MB `B`/`BL` reach. Release links because its `__TEXT` is about 50MB smaller. The section now declares its type and attributes in full, so it sorts directly after `__text`.
+
 ## 0.5.0 (2026-08-14)
 
 - changed: (Breaking) `broadcastTransaction` returns a `BroadcastResult` with the transaction secret key (`txKey`) instead of the string `"success"`. The key is the sender's only proof of payment and the broadcast is the send path's only chance to hand it to the caller, since it cannot be derived from the seed. A key the wallet cannot report never fails an already-broadcast payment: the result simply carries no `txKey`.

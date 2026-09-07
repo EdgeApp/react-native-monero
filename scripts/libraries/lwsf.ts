@@ -8,9 +8,14 @@ import { addTask } from '../utils/tasks'
 const moneroHash = '38bc62741b82cca179fb8e3437a388b0e0f67842' // Nov 7, 2025
 // const moneroHash = '1c9686cb45bec8cd1ca5142426b9ea9458ac4384' // Last compatible version?
 
+// Bump the revision whenever the patches below change, or the build silently
+// reuses the cached (stale-patched) monero tree. The literal tag does not hash
+// the patch content, so edits here are invisible to the cache otherwise.
+const moneroPatchTag = '1-esect'
+
 addTask({
   name: 'monero.clone',
-  cacheTag: moneroHash,
+  cacheTag: `${moneroHash}-${moneroPatchTag}`,
   async run(build) {
     await getRepo(
       'monero',
@@ -57,6 +62,43 @@ addTask({
         ),
       'utf8'
     )
+
+    // Patch the vendored LMDB so its `text_env` section is flagged as code.
+    //
+    // mdb.c puts ~50 infrequently used env functions in a private section via
+    // ESECT. On Apple that expands to `section("__TEXT,text_env")`, a two-field
+    // Mach-O spec that defaults to type S_REGULAR with S_ATTR_SOME_INSTRUCTIONS
+    // and WITHOUT S_ATTR_PURE_INSTRUCTIONS. ld therefore does not consider the
+    // section code: it sorts it after every real code section, at the far end of
+    // __TEXT, and refuses to plant a branch island into it. In a Debug simulator
+    // build of an app carrying all four large native wallet libraries, __TEXT
+    // reaches ~190MB, the distance from __text to text_env passes the +/-128MB
+    // reach of arm64 B/BL, and the link dies on
+    //   ld: fixup error (kind=arm64_b26) ... B/BL out of range ... ('_mdb_mutex_failed')
+    // Release links because its __TEXT is ~50MB smaller.
+    //
+    // Spelling the section out in full (segment, section, type, attributes) sets
+    // S_ATTR_PURE_INSTRUCTIONS, giving text_env the same flags as __text, so ld
+    // sorts it with the other code and can route branch islands into it. The
+    // section still exists, so upstream's reason for it is preserved.
+    const mdbPath = join(
+      build.basePath,
+      'monero/external/db_drivers/liblmdb/mdb.c'
+    )
+    const mdbC = await readFile(mdbPath, 'utf8')
+    const patchedMdbC = mdbC.replace(
+      '#  define\tESECT\t__attribute__ ((section("__TEXT,text_env")))',
+      '#  define\tESECT\t__attribute__ ((section("__TEXT,text_env,regular,pure_instructions")))'
+    )
+    // An anchored replace silently no-ops when upstream drifts, which would
+    // reintroduce the link failure with no signal. Fail the build instead, so
+    // the next monero bump has to re-target this patch.
+    if (!patchedMdbC.includes('text_env,regular,pure_instructions')) {
+      throw new Error(
+        'lmdb mdb.c ESECT patch anchor did not match the pinned source'
+      )
+    }
+    await writeFile(mdbPath, patchedMdbC, 'utf8')
 
     // Patch monero/src/net/http.cpp so that `client_factory::create()`
     // returns a nym-aware http client when the nym-fetch interceptor is
