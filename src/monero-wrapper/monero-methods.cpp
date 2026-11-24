@@ -24,6 +24,13 @@
 #include "mnemonics/electrum-words.h"
 #include "string_tools.h"
 
+/** Message signing with the wallet's own keys. */
+#include "common/base58.h"
+#include "common/varint.h"
+#include "crypto/crypto.h"
+#include "crypto/hash.h"
+#include "cryptonote_config.h"
+
 /** Forward declaration for LWSF api_key support (defined in patched rpc.cpp). */
 namespace lwsf { namespace config {
   void set_api_key(const std::string& k);
@@ -393,6 +400,61 @@ std::string seedAndKeysFromMnemonic(const std::vector<std::string> &args) {
   json += "}";
   
   return json;
+}
+
+/**
+ * Sign bytes with the wallet's spend key (no disk I/O).
+ *
+ * Returns the signature wallet2::sign gives for the primary address in
+ * spend-key mode ("SigV2"). The hash covers the signing domain tag, both
+ * public keys of the address, the mode byte and the length-prefixed
+ * bytes. The keys come from the mnemonic rather than from an open
+ * wallet, because lwsf does not implement the wallet API's signMessage.
+ *
+ * Args: mnemonic, bytes as hex
+ * Returns: the signature string ("SigV2" followed by base58)
+ */
+std::string signBytes(const std::vector<std::string> &args) {
+  // The bridge passes strings, so the bytes arrive as hex:
+  std::string message;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(args[1], message)) {
+    throw std::runtime_error("Invalid hex");
+  }
+
+  // Convert mnemonic to spend secret key
+  crypto::secret_key spend_secret;
+  std::string language_name;
+  epee::wipeable_string mnemonic_ws(args[0]);
+
+  if (!crypto::ElectrumWords::words_to_bytes(mnemonic_ws, spend_secret, language_name)) {
+    throw std::runtime_error("Invalid mnemonic");
+  }
+
+  // Recover account from spend key (derives view key automatically)
+  cryptonote::account_base account;
+  account.generate(spend_secret, true, false);  // recover=true
+
+  const auto& keys = account.get_keys();
+  const auto& address = keys.m_account_address;
+
+  const char mode = 0;  // 0 = spend key, 1 = view key
+  std::string data(
+    reinterpret_cast<const char*>(::config::HASH_KEY_MESSAGE_SIGNING),
+    sizeof(::config::HASH_KEY_MESSAGE_SIGNING));  // sizeof includes the trailing NUL
+  data.append(reinterpret_cast<const char*>(&address.m_spend_public_key), sizeof(crypto::public_key));
+  data.append(reinterpret_cast<const char*>(&address.m_view_public_key), sizeof(crypto::public_key));
+  data.push_back(mode);
+  data += tools::get_varint_data(message.size());
+  data += message;
+
+  crypto::hash hash;
+  crypto::cn_fast_hash(data.data(), data.size(), hash);
+
+  crypto::signature signature;
+  crypto::generate_signature(hash, address.m_spend_public_key, keys.m_spend_secret_key, signature);
+
+  return "SigV2" + tools::base58::encode(
+    std::string(reinterpret_cast<const char*>(&signature), sizeof(signature)));
 }
 
 /**
@@ -1118,6 +1180,7 @@ const MoneroMethod moneroMethods[] = {
   { "hello", 0, hello },
   { "generateWallet", 2, generateWallet },
   { "seedAndKeysFromMnemonic", 2, seedAndKeysFromMnemonic },
+  { "signBytes", 2, signBytes },
   { "getNetworkBlockHeight", 3, getNetworkBlockHeight },
   { "isValidAddress", 2, isValidAddress },
   { "openWallet", 8, openWallet },
