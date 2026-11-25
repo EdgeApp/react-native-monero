@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 (2026-11-25)
+
 - added: `signBytes`, which signs bytes with the spend key derived from a mnemonic and returns the `SigV2` signature for the wallet's primary address. It needs no open wallet, so it works on both backends.
 
 ## 0.5.1 (2026-09-22)
