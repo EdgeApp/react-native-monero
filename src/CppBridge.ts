@@ -76,6 +76,22 @@ export class CppBridge {
   }
 
   /**
+   * Sign bytes with the wallet's spend key (no disk I/O).
+   * The signature proves ownership of the primary address derived from
+   * the mnemonic.
+   * The bytes cross the native bridge as hex, since the bridge passes
+   * strings and would change some characters on the way.
+   * @param mnemonic - The 25-word mnemonic seed
+   * @param bytes - The bytes to sign
+   * @returns The signature string ("SigV2...")
+   */
+  async signBytes(mnemonic: string, bytes: Uint8Array): Promise<string> {
+    let hex = ''
+    for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
+    return await this.module.callMonero('signBytes', [mnemonic, hex])
+  }
+
+  /**
    * Get the current network blockchain height from a daemon.
    * @param backend - Backend type ('lws' or 'monerod')
    * @param nettype - Network type (0=mainnet, 1=testnet, 2=stagenet)
